@@ -10,7 +10,7 @@ It was specifically designed to handle the complex topography, diverse fuel type
 * **Mediterranean Fuel Libraries:** Pre-configured with empirical constants (surface-area-to-volume ratio, bulk density, heat content) for native Greek vegetation, including Aleppo Pine, Phrygana (Low Scrub), Maquis, and Dry Grass.
 * **Dynamic Weather & Moisture:** Calculates Equilibrium Moisture Content (EMC) dynamically based on live ambient temperature and relative humidity inputs, mimicking the explosive fire conditions of summer heatwaves.
 * **3D Topographic Visualization:** Built on the powerful VTK/PyVista backend, the visualizer renders the terrain in full 3D, mapping fuel patches to colors and dynamically updating the fire front and burnt ash areas.
-* **Decoupled Architecture:** Separates the heavy physics calculation loop from the GPU rendering loop, allowing for "Batch Processing" of simulations and smooth, high-FPS playback of the results.
+* **Decoupled Architecture:** Separates the heavy physics calculation loop from the rendering loop, allowing for "Batch Processing" of simulations and smooth, high-FPS playback of the results.
 * **Custom HUD & Wind Vectoring:** Features a custom 2D VTK overlay compass that accurately translates meteorological wind inputs (direction and speed) into Cartesian mathematical vectors applied to the 3D landscape.
 
 ## ⚙️ Technical Architecture
