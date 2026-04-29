@@ -7,7 +7,7 @@ CELL_SIZE_METERS = 5.0       # Physical size of one cell
 # --- 2. Environment & Weather ---
 TEMPERATURE_C = 38.0         # Air temperature in Celsius
 RELATIVE_HUMIDITY = 10.0     # Relative humidity in percentage (0-100)
-WIND_SPEED = 10.0            
+WIND_SPEED = 1.0            
 WIND_DIRECTION = 45
 
 # --- 3. Fire Physics ---
