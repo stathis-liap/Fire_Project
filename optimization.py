@@ -143,6 +143,7 @@ if __name__ == "__main__":
     optimizer.evaluation_history.sort(key=lambda x: x[0], reverse=True)
     top_50 = optimizer.evaluation_history[:50]
     
+    
     ensemble_grid = np.zeros(config.GRID_SIZE, dtype=float)
     
     for iou, params in top_50:
