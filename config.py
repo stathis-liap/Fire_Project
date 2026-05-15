@@ -14,3 +14,7 @@ WIND_DIRECTION = 45
 BURN_TIME_STEPS = 60         # Increased to 60 so fire survives low-wind conditions
 P_BASE_SPREAD = 0.5          # Balanced spread (if used in future probabilistic models)
 MAX_SIMULATION_STEPS = 5000  # How many steps to calculate before stopping
+dt = 0.1                     # Minutes of real fire time per simulation step
+
+# --- 4. Time ---
+SIMULATION_START_TIME = "14:00"   # Clock time shown when the fire ignites (HH:MM)
