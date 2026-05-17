@@ -1,7 +1,7 @@
 """
 gui_launcher.py  -  Project WILSON  |  Wildfire Hindcast GUI
 =============================================================
-Step-by-step pipeline GUI: FIRMS -> ERA5 -> Terrain -> Optimize -> Animate
+Step-by-step pipeline GUI: FIRMS -> ERA5 -> Terrain -> Optimize -> Animate -> Ensemble
 
 Run with:
     python gui_launcher.py
@@ -38,7 +38,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import numpy as np
 
@@ -50,6 +50,7 @@ ACCENT    = "#f38ba8"
 ACCENT2   = "#89b4fa"
 GREEN     = "#a6e3a1"
 YELLOW    = "#f9e2af"
+PURPLE    = "#cba6f7"
 TEXT      = "#cdd6f4"
 TEXT_DIM  = "#7f849c"
 FONT_MAIN = ("Segoe UI", 10)
@@ -63,11 +64,28 @@ STEP_NAMES = [
     "Fetch terrain (DEM + CORINE)",
     "Extract ground truth mask",
     "Run Differential Evolution",
+    "Build ensemble forecast",
 ]
-_ICON     = {"pending": "o", "running": "@", "done": "v", "error": "X"}
-_ICON_CLR = {"pending": TEXT_DIM, "running": YELLOW, "done": GREEN, "error": ACCENT}
+_ICON     = {"pending": "o", "running": "@", "done": "v", "error": "X", "skipped": "-"}
+_ICON_CLR = {"pending": TEXT_DIM, "running": YELLOW, "done": GREEN,
+             "error": ACCENT, "skipped": TEXT_DIM}
 
 FUEL_COLORS = ["#228B22", "#8B4513", "#556B2F", "#DAA520", "#90EE90", "#D3D3D3", "#4682B4"]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Shared confidence colormap (used by main figure + asset probe)
+# Transparent at 0 → pale yellow → orange → red → dark red
+# ──────────────────────────────────────────────────────────────────────────────
+CMAP_CONFIDENCE = LinearSegmentedColormap.from_list(
+    "fire_conf",
+    [(0.0,  (1.0, 1.0, 0.6, 0.0)),
+     (0.1,  (1.0, 1.0, 0.4, 0.45)),
+     (0.5,  (1.0, 0.6, 0.0, 0.75)),
+     (0.9,  (0.9, 0.1, 0.0, 0.92)),
+     (1.0,  (0.5, 0.0, 0.0, 1.0))],
+    N=256,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -109,7 +127,7 @@ class WilsonGUI(tk.Tk):
         super().__init__()
         self.title("Project WILSON -- Wildfire Digital Twin")
         self.configure(bg=BG)
-        self.geometry("1300x880")
+        self.geometry("1300x900")
         self.resizable(True, True)
 
         self._result      = None
@@ -126,6 +144,9 @@ class WilsonGUI(tk.Tk):
         # Clock / fire-time display
         self._wall_clock_var = tk.StringVar(value="")
         self._fire_time_var  = tk.StringVar(value="")
+        # Asset-at-risk probe state
+        self._probe_marker_artist = None
+        self._probe_result_var    = tk.StringVar(value="Click the heatmap or enter Lat/Lon to query a cell.")
 
         self._setup_styles()
         self._build_ui()
@@ -143,6 +164,8 @@ class WilsonGUI(tk.Tk):
         s.configure("TProgressbar",     troughcolor=BG_PANEL, background=ACCENT2)
         s.configure("Dark.TCheckbutton", background=BG_PANEL, foreground=TEXT,
                     font=FONT_MAIN)
+        s.configure("Dark.TCombobox",   fieldbackground=BG_ENTRY, background=BG_ENTRY,
+                    foreground=TEXT, arrowcolor=TEXT)
 
     # ── Top-level layout ───────────────────────────────────────────────────────
     def _build_ui(self):
@@ -169,14 +192,43 @@ class WilsonGUI(tk.Tk):
 
     def _tick_wall_clock(self):
         """Update the wall clock label every second."""
-        self._wall_clock_var.set("🕐 " + datetime.datetime.now().strftime("%H:%M:%S"))
+        self._wall_clock_var.set(" " + datetime.datetime.now().strftime("%H:%M:%S"))
         self.after(1000, self._tick_wall_clock)
 
     # ── Sidebar ────────────────────────────────────────────────────────────────
     def _build_sidebar(self, parent):
-        sidebar = tk.Frame(parent, bg=BG_PANEL, width=290)
-        sidebar.pack(side="left", fill="y", padx=(8, 0), pady=8)
-        sidebar.pack_propagate(False)
+        # ── Scrollable sidebar (canvas + inner frame) ──────────────────────
+        # The sidebar accumulated enough sections that on a 1080p / laptop
+        # screen the lower controls (Run button, presets) were getting cut
+        # off.  Wrapping the inner frame in a Canvas with a scrollbar fixes
+        # this without breaking any existing layout calls.
+        sidebar_wrap = tk.Frame(parent, bg=BG_PANEL, width=310)
+        sidebar_wrap.pack(side="left", fill="y", padx=(8, 0), pady=8)
+        sidebar_wrap.pack_propagate(False)
+
+        side_canvas = tk.Canvas(sidebar_wrap, bg=BG_PANEL,
+                                highlightthickness=0, bd=0)
+        side_scroll = ttk.Scrollbar(sidebar_wrap, orient="vertical",
+                                    command=side_canvas.yview)
+        side_canvas.configure(yscrollcommand=side_scroll.set)
+        side_canvas.pack(side="left", fill="both", expand=True)
+        side_scroll.pack(side="right", fill="y")
+
+        sidebar = tk.Frame(side_canvas, bg=BG_PANEL)
+        side_canvas.create_window((0, 0), window=sidebar, anchor="nw",
+                                  width=290)
+
+        def _on_resize(_e):
+            side_canvas.configure(scrollregion=side_canvas.bbox("all"))
+        sidebar.bind("<Configure>", _on_resize)
+
+        # Mouse-wheel scrolling (Windows / macOS / Linux)
+        def _on_wheel(event):
+            delta = -1 if event.delta > 0 else 1
+            side_canvas.yview_scroll(delta, "units")
+        side_canvas.bind_all("<MouseWheel>", _on_wheel)
+        side_canvas.bind_all("<Button-4>", lambda e: side_canvas.yview_scroll(-1, "units"))
+        side_canvas.bind_all("<Button-5>", lambda e: side_canvas.yview_scroll(1, "units"))
 
         def section(title):
             tk.Label(sidebar, text=title, font=FONT_HEAD,
@@ -224,6 +276,32 @@ class WilsonGUI(tk.Tk):
         self.v_terrain_buf  = entry_row("Terrain buf",   "0.25",  "Half-width degrees (~28km)")
         self.v_maxiter      = entry_row("Max Gens",      "20",    "DE generations")
         self.v_popsize      = entry_row("Pop Size",      "12",    "Candidates/generation (>=5)")
+
+        # ── Ensemble Forecasting ──────────────────────────────────────────
+        section("Ensemble Forecast")
+        self.v_ensemble = entry_row(
+            "Members (N)", "0",
+            "Number of top-N unique parameter sets to re-run as an ensemble.\n"
+            "0 = disabled (saves time).  Typical: 30-100.\n"
+            "Cost: N × (one fine-resolution CA run)."
+        )
+        # Weighting dropdown
+        wrow = tk.Frame(sidebar, bg=BG_PANEL)
+        wrow.pack(fill="x", padx=10, pady=2)
+        tk.Label(wrow, text="Weighting", font=FONT_MAIN, fg=TEXT,
+                 bg=BG_PANEL, width=16, anchor="w").pack(side="left")
+        self.v_ensemble_weight = tk.StringVar(value="uniform")
+        wcb = ttk.Combobox(wrow, textvariable=self.v_ensemble_weight,
+                           values=["uniform", "softmax"], state="readonly", width=10)
+        wcb.pack(side="left", fill="x", expand=True)
+        _ToolTip(wcb,
+            "uniform : every member counts equally (most honest spread).\n"
+            "softmax : better-scoring members dominate (use with care).")
+        self.v_ensemble_tau = entry_row(
+            "Softmax τ", "0.05",
+            "Softmax temperature.  Lower → more peaked around best member.\n"
+            "Only used when weighting = softmax."
+        )
 
         section("Output")
         self.v_save_plot = tk.BooleanVar(value=True)
@@ -334,6 +412,7 @@ class WilsonGUI(tk.Tk):
         self._tab_fire     = self._make_tab("Fire Animation")
         self._tab_hillfire = self._make_tab("Hillshade Fire")
         self._tab_compare  = self._make_tab("Comparison")
+        self._tab_ensemble = self._make_tab("Ensemble")
         self._tab_fired_tl = self._make_tab("FIRED Timeline")
         self._tab_earth3d  = self._make_tab("3D Earth View")
         self._tab_analysis = self._make_tab("Analysis")
@@ -343,6 +422,7 @@ class WilsonGUI(tk.Tk):
         self._build_fire_tab(self._tab_fire)
         self._build_hillfire_tab(self._tab_hillfire)
         self._build_compare_tab(self._tab_compare)
+        self._build_ensemble_tab(self._tab_ensemble)
         self._build_fired_tab(self._tab_fired_tl)
         self._build_earth3d_tab(self._tab_earth3d)
         self._build_analysis_tab(self._tab_analysis)
@@ -472,7 +552,7 @@ class WilsonGUI(tk.Tk):
 
         # 3-D PyVista launch button (enabled after run completes)
         self.btn_3d = tk.Button(
-            frm, text="🌋  Launch 3D View (PyVista)",
+            frm, text="  Launch 3D View (PyVista)",
             font=FONT_MAIN, bg="#313244", fg="#cba6f7",
             relief="flat", bd=0, cursor="hand2",
             command=self._launch_3d_view, state="disabled"
@@ -548,9 +628,9 @@ class WilsonGUI(tk.Tk):
         ign_time = self._result.get("ignition_time")
         if ign_time is not None:
             fire_dt = ign_time + datetime.timedelta(minutes=t_min)
-            self._fire_time_var.set(f"🔥 {fire_dt.strftime('%Y-%m-%d %H:%M UTC')}  (+{t_min:.0f} min)")
+            self._fire_time_var.set(f" {fire_dt.strftime('%Y-%m-%d %H:%M UTC')}  (+{t_min:.0f} min)")
         else:
-            self._fire_time_var.set(f"🔥 t = {t_min:.0f} min  ({burned_ha:.1f} ha)")
+            self._fire_time_var.set(f" t = {t_min:.0f} min  ({burned_ha:.1f} ha)")
 
         ax.set_title(
             f"Fire on terrain  |  t ~ {t_min:.0f} min  |  "
@@ -776,6 +856,364 @@ class WilsonGUI(tk.Tk):
         self._fig_compare.tight_layout(pad=2.0)
         self._canvas_compare.draw()
 
+    # ── Ensemble tab ──────────────────────────────────────────────────────────
+    def _build_ensemble_tab(self, frm):
+        """
+        Probabilistic Ensemble Confidence visualisation.
+
+        Layout
+        ------
+        - 4-panel matplotlib figure (top): confidence heatmap + iso-contours,
+          confidence vs truth perimeter, probability histogram, parameter scatter.
+        - Asset-at-risk probe (below figure): click the map or enter Lat/Lon
+          to read the per-cell burn probability — answers "what's the chance
+          THIS house burns?" directly.
+        """
+        # ── Matplotlib figure (4 panels in 2×2) ───────────────────────────
+        self._fig_ens, self._ax_ens = plt.subplots(2, 2, figsize=(13, 8))
+        self._fig_ens.patch.set_facecolor("#1e1e2e")
+        for ax in self._ax_ens.flat:
+            ax.set_facecolor("#11111b")
+            ax.tick_params(colors=TEXT_DIM, labelsize=7)
+            for spine in ax.spines.values():
+                spine.set_edgecolor(TEXT_DIM)
+        # Placeholder message while data isn't ready
+        for ax in self._ax_ens.flat:
+            ax.text(
+                0.5, 0.5,
+                "Set 'Members (N)' > 0 in the sidebar\nand run the pipeline to see the ensemble.",
+                ha="center", va="center", color=TEXT_DIM, fontsize=10,
+                transform=ax.transAxes, linespacing=1.6,
+            )
+        self._fig_ens.tight_layout(pad=2.5)
+        self._canvas_ens = FigureCanvasTkAgg(self._fig_ens, master=frm)
+        self._canvas_ens.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self._canvas_ens, frm).pack(fill="x")
+
+        # ── Asset-at-risk probe panel ─────────────────────────────────────
+        # Stacked below the figure: provides a concrete "X % chance this
+        # specific point burns" answer for stakeholders.
+        probe = tk.Frame(frm, bg=BG_PANEL)
+        probe.pack(fill="x", padx=4, pady=(2, 4))
+
+        tk.Label(probe, text="Asset-at-Risk Probe",
+                 font=("Segoe UI Semibold", 10), fg=PURPLE, bg=BG_PANEL,
+                 anchor="w").pack(fill="x", padx=8, pady=(4, 0))
+        tk.Label(probe,
+                 text="Click the confidence heatmap (top-left panel), or type a GPS coordinate below.",
+                 font=("Segoe UI", 8), fg=TEXT_DIM, bg=BG_PANEL,
+                 anchor="w").pack(fill="x", padx=8)
+
+        row = tk.Frame(probe, bg=BG_PANEL)
+        row.pack(fill="x", padx=8, pady=4)
+        tk.Label(row, text="Lat:", font=FONT_MAIN, fg=TEXT, bg=BG_PANEL
+                 ).pack(side="left", padx=(0, 2))
+        self.v_probe_lat = tk.StringVar(value="")
+        tk.Entry(row, textvariable=self.v_probe_lat, font=FONT_MAIN,
+                 bg=BG_ENTRY, fg=TEXT, insertbackground=TEXT,
+                 relief="flat", bd=3, width=10).pack(side="left", padx=(0, 8))
+        tk.Label(row, text="Lon:", font=FONT_MAIN, fg=TEXT, bg=BG_PANEL
+                 ).pack(side="left", padx=(0, 2))
+        self.v_probe_lon = tk.StringVar(value="")
+        tk.Entry(row, textvariable=self.v_probe_lon, font=FONT_MAIN,
+                 bg=BG_ENTRY, fg=TEXT, insertbackground=TEXT,
+                 relief="flat", bd=3, width=10).pack(side="left", padx=(0, 8))
+        tk.Button(row, text="Query", font=FONT_MAIN,
+                  bg=BG_ENTRY, fg=PURPLE, relief="flat", bd=0,
+                  cursor="hand2", command=self._probe_by_latlon
+                  ).pack(side="left", padx=(0, 8))
+        tk.Button(row, text="Clear marker", font=FONT_MAIN,
+                  bg=BG_ENTRY, fg=TEXT_DIM, relief="flat", bd=0,
+                  cursor="hand2", command=self._probe_clear
+                  ).pack(side="left")
+
+        # Result display — wraps so long messages don't push layout
+        tk.Label(probe, textvariable=self._probe_result_var,
+                 font=("Courier New", 10), fg=TEXT, bg=BG_PANEL,
+                 anchor="w", justify="left", wraplength=1100
+                 ).pack(fill="x", padx=8, pady=(2, 6))
+
+        # Wire up click handler on the confidence heatmap (panel [0,0])
+        self._canvas_ens.mpl_connect("button_press_event", self._on_ensemble_click)
+
+    def _update_ensemble_tab(self):
+        """
+        Render the ensemble confidence figure.
+
+        If the run was performed with ensemble_size = 0, show an explanatory
+        placeholder and leave the asset-probe disabled.
+        """
+        if self._result is None:
+            return
+
+        # ── No ensemble data? Show informative placeholder and bail. ─────
+        if "confidence_map" not in self._result or "ensemble" not in self._result:
+            for ax in self._ax_ens.flat:
+                ax.cla()
+                ax.set_facecolor("#11111b")
+                ax.tick_params(colors=TEXT_DIM, labelsize=7)
+                ax.text(
+                    0.5, 0.5,
+                    "Ensemble forecasting was disabled for this run.\n\n"
+                    "To enable: set 'Members (N)' to a positive integer\n"
+                    "(typical: 30–100) in the sidebar and re-run.",
+                    ha="center", va="center", color=TEXT_DIM, fontsize=10,
+                    transform=ax.transAxes, linespacing=1.6,
+                )
+            self._fig_ens.tight_layout(pad=2.0)
+            self._canvas_ens.draw()
+            self._probe_result_var.set("Ensemble disabled — no per-cell probabilities available.")
+            return
+
+        # ── Pull data ─────────────────────────────────────────────────────
+        land           = self._result["landscape"]
+        cm             = self._result["confidence_map"]
+        truth          = self._result["truth_mask"]
+        r0, c0         = self._result["ignition_rc"]
+        ig_lat, ig_lon = self._result["ignition_latlon"]
+        weather        = self._result["weather"]
+        ensemble       = self._result["ensemble"]
+        members        = ensemble["members"]
+        iou            = self._result.get("iou", 0) * 100
+        best_params    = self._result["best_params"]
+
+        # Clear all panels
+        for ax in self._ax_ens.flat:
+            ax.cla()
+            ax.set_facecolor("#11111b")
+            ax.tick_params(colors=TEXT_DIM, labelsize=7)
+
+        # Hillshade backdrop (computed once, reused by both top panels)
+        try:
+            shade = self._compute_hillshade(land.elevation)
+        except Exception:
+            shade = None
+
+        # ── Panel [0,0]: Confidence heatmap + iso-probability contours ────
+        ax = self._ax_ens[0, 0]
+        if shade is not None:
+            ax.imshow(shade, cmap="gray", origin="lower", vmin=0, vmax=1, alpha=0.65)
+        else:
+            ax.imshow(land.elevation, cmap="gray", origin="lower", alpha=0.55)
+        im = ax.imshow(cm, cmap=CMAP_CONFIDENCE, vmin=0, vmax=1, origin="lower")
+
+        # Iso-probability contours: 10 / 50 / 90 %
+        if cm.max() > 0:
+            cs = ax.contour(cm, levels=[0.1, 0.5, 0.9],
+                            colors=["#fff066", "#ff8800", "#cc0000"],
+                            linewidths=[1.0, 1.4, 1.8], origin="lower")
+            try:
+                ax.clabel(cs, fmt={0.1: "10%", 0.5: "50%", 0.9: "90%"},
+                          fontsize=7, inline=True)
+            except Exception:
+                pass
+
+        ax.plot(c0, r0, marker="*", color="white", ms=12,
+                markeredgecolor="yellow", markeredgewidth=0.8)
+        ax.set_title(f"Burn Probability  (N={len(members)} members)",
+                     color=TEXT, fontsize=9)
+        cb = self._fig_ens.colorbar(im, ax=ax, fraction=0.046)
+        cb.set_label("Burn probability", color=TEXT_DIM, fontsize=8)
+        cb.ax.tick_params(colors=TEXT_DIM, labelsize=7)
+        cb.set_ticks([0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0])
+        cb.set_ticklabels(["0%", "10%", "25%", "50%", "75%", "90%", "100%"])
+
+        # ── Panel [0,1]: Confidence vs ground-truth perimeter ─────────────
+        ax = self._ax_ens[0, 1]
+        if shade is not None:
+            ax.imshow(shade, cmap="gray", origin="lower", vmin=0, vmax=1, alpha=0.65)
+        else:
+            ax.imshow(land.elevation, cmap="gray", origin="lower", alpha=0.55)
+        ax.imshow(cm, cmap=CMAP_CONFIDENCE, vmin=0, vmax=1, origin="lower")
+        if truth.any():
+            ax.contour(truth.astype(float), levels=[0.5],
+                       colors="cyan", linewidths=1.6, origin="lower")
+        ax.plot(c0, r0, marker="*", color="white", ms=12,
+                markeredgecolor="yellow", markeredgewidth=0.8)
+        ax.set_title("Confidence vs Ground-Truth Perimeter", color=TEXT, fontsize=9)
+        ax.legend(handles=[
+            mpatches.Patch(color="cyan",
+                           label=f"Ground truth ({int(truth.sum())} cells)"),
+            mpatches.Patch(color=(0.9, 0.1, 0.0, 0.9),  label="≥90%"),
+            mpatches.Patch(color=(1.0, 0.6, 0.0, 0.75), label="50–90%"),
+            mpatches.Patch(color=(1.0, 1.0, 0.4, 0.45), label="10–50%"),
+        ], fontsize=6, loc="lower right")
+
+        # ── Panel [1,0]: Histogram of non-zero confidence ─────────────────
+        ax = self._ax_ens[1, 0]
+        flat = cm.ravel()
+        nonzero = flat[flat > 0.0]
+        if nonzero.size == 0:
+            ax.text(0.5, 0.5, "No burned cells in any member.",
+                    ha="center", va="center", color=TEXT_DIM, fontsize=10,
+                    transform=ax.transAxes)
+            ax.set_axis_off()
+        else:
+            ax.hist(nonzero, bins=20, range=(0, 1),
+                    color="#ff5500", edgecolor="black", alpha=0.85)
+            ax.axvline(0.1, color="#cccc00", linestyle="--", linewidth=1, label="10%")
+            ax.axvline(0.5, color="#ff8800", linestyle="--", linewidth=1, label="50%")
+            ax.axvline(0.9, color="#cc0000", linestyle="--", linewidth=1, label="90%")
+            ax.set_xlabel("Per-cell burn probability", color=TEXT_DIM, fontsize=8)
+            ax.set_ylabel("Number of grid cells",      color=TEXT_DIM, fontsize=8)
+            ax.set_title(f"Confidence Distribution  "
+                         f"({nonzero.size:,} cells with any burn prob.)",
+                         color=TEXT, fontsize=9)
+            ax.legend(fontsize=7)
+            ax.grid(alpha=0.25, color=TEXT_DIM)
+
+        # ── Panel [1,1]: Parameter scatter coloured by error ──────────────
+        ax = self._ax_ens[1, 1]
+        pts  = np.array([m["params"] for m in members])
+        errs = np.array([m["error"]  for m in members])
+        sc = ax.scatter(pts[:, 0], pts[:, 1], c=errs, cmap="viridis_r",
+                        s=55, edgecolor="black", linewidth=0.4)
+        best_i = int(np.argmin(errs))
+        ax.plot(pts[best_i, 0], pts[best_i, 1], marker="*",
+                color="red", ms=18, markeredgecolor="white", markeredgewidth=1.2,
+                label=f"Best (err={errs[best_i]:.4f})")
+        ax.set_xlabel("Fuel-moisture offset  Δm", color=TEXT_DIM, fontsize=8)
+        ax.set_ylabel("Wind multiplier  k",       color=TEXT_DIM, fontsize=8)
+        ax.set_title(f"Ensemble Parameter Spread  (N={len(members)})",
+                     color=TEXT, fontsize=9)
+        cb2 = self._fig_ens.colorbar(sc, ax=ax, fraction=0.046)
+        cb2.set_label("Composite error", color=TEXT_DIM, fontsize=8)
+        cb2.ax.tick_params(colors=TEXT_DIM, labelsize=7)
+        ax.legend(fontsize=7, loc="best")
+        ax.grid(alpha=0.25, color=TEXT_DIM)
+
+        # Summary suptitle
+        weighting_desc = self.v_ensemble_weight.get() if hasattr(self, "v_ensemble_weight") else "uniform"
+        self._fig_ens.suptitle(
+            f"Ensemble Forecast  |  {len(members)} members  |  weighting={weighting_desc}  "
+            f"|  Best IoU={iou:.1f}%  "
+            f"Δm={best_params['fuel_moisture_offset']:+.3f}  "
+            f"k_wind={best_params['wind_multiplier']:.2f}",
+            color=TEXT_DIM, fontsize=9,
+        )
+        self._fig_ens.tight_layout(pad=2.0)
+        self._canvas_ens.draw()
+
+        # Reset probe
+        self._probe_marker_artist = None
+        self._probe_result_var.set(
+            "Click the heatmap (top-left) or type Lat/Lon to query per-cell burn probability."
+        )
+
+    # ── Asset-at-risk probe helpers ─────────────────────────────────────
+    def _on_ensemble_click(self, event):
+        """Handle a left-click on the confidence heatmap (panel [0,0])."""
+        if event.inaxes is not self._ax_ens[0, 0]:
+            return
+        if self._result is None or "confidence_map" not in self._result:
+            return
+        cm = self._result["confidence_map"]
+        rows, cols = cm.shape
+        col_idx = int(round(event.xdata))
+        row_idx = int(round(event.ydata))
+        if not (0 <= row_idx < rows and 0 <= col_idx < cols):
+            return
+        self._probe_at_cell(row_idx, col_idx)
+
+    def _probe_by_latlon(self):
+        """Read Lat/Lon entries and probe the matching cell."""
+        if self._result is None or "confidence_map" not in self._result:
+            self._probe_result_var.set("No ensemble data yet — run the pipeline first.")
+            return
+        try:
+            lat = float(self.v_probe_lat.get())
+            lon = float(self.v_probe_lon.get())
+        except ValueError:
+            self._probe_result_var.set("Invalid Lat/Lon — enter decimal degrees, e.g. 36.150  28.045")
+            return
+        geo = self._result.get("geo_grid")
+        if geo is None:
+            self._probe_result_var.set("Geo-grid missing from result; cannot map Lat/Lon to cell.")
+            return
+        # Bounds check — warn but don't refuse
+        if not (geo.lat_min <= lat <= geo.lat_max and
+                geo.lon_min <= lon <= geo.lon_max):
+            self._probe_result_var.set(
+                f"⚠ ({lat:.4f}, {lon:.4f}) is outside the terrain domain "
+                f"[{geo.lat_min:.3f}..{geo.lat_max:.3f} N, "
+                f"{geo.lon_min:.3f}..{geo.lon_max:.3f} E]."
+            )
+            return
+        r, c = geo.latlon_to_rc(lat, lon)
+        self._probe_at_cell(r, c)
+
+    def _probe_at_cell(self, r: int, c: int):
+        """Read confidence_map[r, c], update the marker on the heatmap, and report."""
+        cm    = self._result["confidence_map"]
+        truth = self._result["truth_mask"]
+        geo   = self._result.get("geo_grid")
+        land  = self._result["landscape"]
+
+        prob   = float(cm[r, c])
+        in_tru = bool(truth[r, c])
+        elev   = float(land.elevation[r, c])
+        try:
+            fuel_idx  = int(land.fuel_map[r, c])
+            fuel_name = land.fuel_names[fuel_idx] if 0 <= fuel_idx < len(land.fuel_names) else "?"
+        except Exception:
+            fuel_name = "n/a"
+
+        if geo is not None:
+            lat, lon = geo.rc_to_latlon(r, c)
+            gps_str  = f"({lat:.5f}°N, {lon:.5f}°E)"
+            # Also push back into the entry boxes for clarity
+            self.v_probe_lat.set(f"{lat:.5f}")
+            self.v_probe_lon.set(f"{lon:.5f}")
+        else:
+            gps_str = f"cell ({r}, {c})"
+
+        # Verdict tier
+        if prob >= 0.9:
+            verdict = "VERY HIGH risk — almost certainly burns"
+        elif prob >= 0.5:
+            verdict = "HIGH risk — likely burns"
+        elif prob >= 0.1:
+            verdict = "MODERATE risk — possible burn"
+        elif prob > 0:
+            verdict = "LOW risk — unlikely but not impossible"
+        else:
+            verdict = "Not in any ensemble member's burn footprint"
+
+        truth_str = "  (inside ground-truth perimeter)" if in_tru else "  (outside ground-truth perimeter)"
+
+        self._probe_result_var.set(
+            f"GPS {gps_str}   cell=(r={r}, c={c})   elev={elev:.0f} m   fuel={fuel_name}\n"
+            f"Burn probability: {prob*100:.1f}%   →   {verdict}{truth_str}"
+        )
+
+        # Update the marker on the confidence heatmap (panel [0,0])
+        ax = self._ax_ens[0, 0]
+        if self._probe_marker_artist is not None:
+            try:
+                self._probe_marker_artist.remove()
+            except Exception:
+                pass
+            self._probe_marker_artist = None
+        self._probe_marker_artist, = ax.plot(
+            c, r, marker="o", markersize=12,
+            markeredgecolor=PURPLE, markerfacecolor="none",
+            markeredgewidth=2.0,
+        )
+        self._canvas_ens.draw_idle()
+
+    def _probe_clear(self):
+        """Remove the probe marker from the heatmap."""
+        if self._probe_marker_artist is not None:
+            try:
+                self._probe_marker_artist.remove()
+            except Exception:
+                pass
+            self._probe_marker_artist = None
+            self._canvas_ens.draw_idle()
+        self.v_probe_lat.set("")
+        self.v_probe_lon.set("")
+        self._probe_result_var.set("Marker cleared.")
+
     # ── FIRED Timeline tab ────────────────────────────────────────────────────
 
     def _build_fired_tab(self, frm):
@@ -965,7 +1403,7 @@ class WilsonGUI(tk.Tk):
         card = tk.Frame(frm, bg=BG_PANEL)
         card.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(card, text="🌋  Interactive 3D Fire Terrain",
+        tk.Label(card, text="  Interactive 3D Fire Terrain",
                  font=("Segoe UI", 16, "bold"), fg=ACCENT2, bg=BG_PANEL
                  ).pack(pady=(30, 6))
         tk.Label(card,
@@ -1108,6 +1546,8 @@ class WilsonGUI(tk.Tk):
 
     # ── Step status helpers ────────────────────────────────────────────────────
     def _set_step(self, idx, status):
+        if idx >= len(self._step_status):
+            return
         self._step_status[idx] = status
         icon_var, icon_lbl = self._step_labels[idx]
         self.after(0, lambda iv=icon_var, il=icon_lbl, s=status: (
@@ -1145,6 +1585,18 @@ class WilsonGUI(tk.Tk):
                 errs.append("Population size must be >= 5")
         except ValueError:
             errs.append("Numeric fields are invalid")
+        # Ensemble validation
+        try:
+            n_ens = int(self.v_ensemble.get())
+            if n_ens < 0:
+                errs.append("Ensemble Members must be >= 0")
+            if n_ens > 500:
+                errs.append("Ensemble Members > 500 is impractical (very long run)")
+            tau = float(self.v_ensemble_tau.get())
+            if tau <= 0:
+                errs.append("Softmax τ must be > 0")
+        except ValueError:
+            errs.append("Ensemble Members / τ must be numbers")
         if errs:
             messagebox.showerror("Invalid Input", "\n".join(f"- {e}" for e in errs))
             return False
@@ -1184,7 +1636,13 @@ class WilsonGUI(tk.Tk):
 
         def worker():
             try:
+                # Lazy import keeps GUI startup snappy and surfaces import
+                # errors in the log instead of a crash on launch.
                 from pipeline.hindcast_optimizer import run_hindcast, plot_results
+                try:
+                    from pipeline.hindcast_optimizer import plot_ensemble
+                except ImportError:
+                    plot_ensemble = None  # older versions of the optimizer
 
                 # Ground-truth priority: Copernicus .shp > FIRED .gpkg > FIRMS
                 shp_path  = self.v_truth_shp.get().strip()
@@ -1199,6 +1657,18 @@ class WilsonGUI(tk.Tk):
                     print(f"[GUI] Ground truth: FIRED GeoPackage → {fired_gpkg}")
                 else:
                     print("[GUI] Ground truth: NASA FIRMS (auto-fetched)")
+
+                # Ensemble parameters
+                n_ensemble = int(self.v_ensemble.get())
+                ens_weight = self.v_ensemble_weight.get()
+                ens_tau    = float(self.v_ensemble_tau.get())
+                if n_ensemble > 0:
+                    print(f"[GUI] Ensemble: {n_ensemble} members, weighting={ens_weight}"
+                          + (f", τ={ens_tau}" if ens_weight == "softmax" else ""))
+                else:
+                    print("[GUI] Ensemble: disabled")
+                    # Mark ensemble step as skipped (visual feedback in sidebar)
+                    self._set_step(6, "skipped")
 
                 result = run_hindcast(
                     map_key         = self.v_key.get().strip(),
@@ -1215,12 +1685,22 @@ class WilsonGUI(tk.Tk):
                     eval_callback   = _eval_cb,
                     truth_shapefile = truth_shp,
                     fired_gpkg      = fired_gpkg,
+                    ensemble_size       = n_ensemble,
+                    ensemble_weighting  = ens_weight,
+                    ensemble_softmax_tau= ens_tau,
                 )
                 self._result = result
 
                 if self.v_save_plot.get():
                     out = str(PROJECT_ROOT / "hindcast_result.png")
                     plot_results(result, output_path=out)
+                    # Also save the ensemble figure if available
+                    if plot_ensemble is not None and "confidence_map" in result:
+                        ens_out = str(PROJECT_ROOT / "hindcast_ensemble.png")
+                        try:
+                            plot_ensemble(result, output_path=ens_out)
+                        except Exception as _pe:
+                            print(f"[GUI] plot_ensemble failed: {_pe}")
 
                 self._build_snapshots(result)
                 self.after(0, self._on_success)
@@ -1301,16 +1781,28 @@ class WilsonGUI(tk.Tk):
         src_tag = {"copernicus": "Copernicus", "fired": "FIRED", "firms_viirs": "FIRMS"}.get(
             truth_src, "FIRMS"
         )
-        self.status_var.set(f"Done!  IoU = {iou:.1f}%  [{src_tag}]")
 
-        for i in range(len(STEP_NAMES)):
+        # Step icons — first 6 always done, ensemble depends on whether it ran
+        for i in range(6):
             self._set_step(i, "done")
+        if "confidence_map" in (self._result or {}):
+            self._set_step(6, "done")
+            n_members = len(self._result["ensemble"]["members"])
+            self.status_var.set(
+                f"Done!  IoU = {iou:.1f}%  [{src_tag}]  Ensemble: {n_members} members"
+            )
+        else:
+            # Already set to "skipped" during the run when N=0
+            if self._step_status[6] != "skipped":
+                self._set_step(6, "skipped")
+            self.status_var.set(f"Done!  IoU = {iou:.1f}%  [{src_tag}]")
 
         self._update_terrain_tab()
         self._update_analysis_tab()
         self._update_fire_tab()
         self._update_hillfire_tab()
         self._update_compare_tab()
+        self._update_ensemble_tab()
         self._update_fired_tab()
 
         # Enable 3D render button now that data is available
@@ -1380,6 +1872,11 @@ class WilsonGUI(tk.Tk):
             save_kwargs["ignition_rc"] = np.array(ign_rc)
         if texture_arr is not None:
             save_kwargs["satellite_texture"] = texture_arr
+
+        # If an ensemble was computed, ship the confidence map along so a
+        # future 3D viewer revision can drape it on the mesh.
+        if self._result.get("confidence_map") is not None:
+            save_kwargs["confidence_map"] = self._result["confidence_map"].astype(np.float32)
 
         np.savez(npz_path, **save_kwargs)
         print(f"[3D View] Saved {snaps_arr.shape[0]} frames → {npz_path}")
@@ -1509,9 +2006,9 @@ class WilsonGUI(tk.Tk):
         ign_time = self._result.get("ignition_time")
         if ign_time is not None:
             fire_dt = ign_time + datetime.timedelta(minutes=t_min)
-            self._fire_time_var.set(f"🔥 {fire_dt.strftime('%Y-%m-%d %H:%M UTC')}  (+{t_min:.0f} min)")
+            self._fire_time_var.set(f" {fire_dt.strftime('%Y-%m-%d %H:%M UTC')}  (+{t_min:.0f} min)")
         else:
-            self._fire_time_var.set(f"🔥 t = {t_min:.0f} min")
+            self._fire_time_var.set(f" t = {t_min:.0f} min")
 
         ax.set_title(
             f"Fire Spread  t ~ {t_min:.0f} min  |  frame {idx + 1}/{len(self._snapshots)}",
@@ -1619,6 +2116,20 @@ class WilsonGUI(tk.Tk):
         self._ax_hill.cla()
         self._hillshade_cache = None
         self._canvas_hill.draw()
+        # Reset ensemble tab
+        for ax in self._ax_ens.flat:
+            ax.cla()
+            ax.set_facecolor("#11111b")
+            ax.tick_params(colors=TEXT_DIM, labelsize=7)
+            ax.text(0.5, 0.5,
+                    "Set 'Members (N)' > 0 in the sidebar\nand run the pipeline to see the ensemble.",
+                    ha="center", va="center", color=TEXT_DIM, fontsize=10,
+                    transform=ax.transAxes, linespacing=1.6)
+        self._canvas_ens.draw()
+        self._probe_marker_artist = None
+        self._probe_result_var.set("Click the heatmap or enter Lat/Lon to query a cell.")
+        self.v_probe_lat.set("")
+        self.v_probe_lon.set("")
         for ax in self._ax_analysis:
             ax.cla()
         self._canvas_analysis.draw()
