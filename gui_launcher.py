@@ -41,6 +41,7 @@ import matplotlib.patches as mpatches
 from matplotlib.colors import ListedColormap
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import numpy as np
+from core.fuels import fuel_colors_for_names as _fuel_colors_for_names
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
 BG        = "#1e1e2e"
@@ -67,7 +68,7 @@ STEP_NAMES = [
 _ICON     = {"pending": "o", "running": "@", "done": "v", "error": "X"}
 _ICON_CLR = {"pending": TEXT_DIM, "running": YELLOW, "done": GREEN, "error": ACCENT}
 
-FUEL_COLORS = ["#228B22", "#8B4513", "#556B2F", "#DAA520", "#90EE90", "#D3D3D3", "#4682B4"]
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -109,7 +110,8 @@ class WilsonGUI(tk.Tk):
         super().__init__()
         self.title("Project WILSON -- Wildfire Digital Twin")
         self.configure(bg=BG)
-        self.geometry("1300x880")
+        self.geometry("1100x780+20+20")   # compact, pinned top-left corner
+        self.minsize(900, 650)
         self.resizable(True, True)
 
         self._result      = None
@@ -120,6 +122,8 @@ class WilsonGUI(tk.Tk):
         self._hill_anim_job   = None
         self._hill_anim_frame = 0
         self._hillshade_cache = None
+        self._fired_day_var   = tk.StringVar(value="No overlay")
+        self._fired_day_masks = {}   # label -> bool grid mask
         self._conv_evals  = []
         self._conv_errors = []
         self._conv_best   = []
@@ -169,23 +173,58 @@ class WilsonGUI(tk.Tk):
 
     def _tick_wall_clock(self):
         """Update the wall clock label every second."""
-        self._wall_clock_var.set("🕐 " + datetime.datetime.now().strftime("%H:%M:%S"))
-        self.after(1000, self._tick_wall_clock)
+        try:
+            if not self.winfo_exists():
+                return
+            self._wall_clock_var.set("🕐 " + datetime.datetime.now().strftime("%H:%M:%S"))
+            self.after(1000, self._tick_wall_clock)
+        except tk.TclError:
+            pass  # widget destroyed — stop the ticker silently
 
     # ── Sidebar ────────────────────────────────────────────────────────────────
     def _build_sidebar(self, parent):
-        sidebar = tk.Frame(parent, bg=BG_PANEL, width=290)
-        sidebar.pack(side="left", fill="y", padx=(8, 0), pady=8)
-        sidebar.pack_propagate(False)
+        # Wrap sidebar in a Canvas+Scrollbar so it scrolls when content overflows
+        _outer = tk.Frame(parent, bg=BG_PANEL, width=300)
+        _outer.pack(side="left", fill="y", padx=(8, 0), pady=8)
+        _outer.pack_propagate(False)
+
+        _vscroll = tk.Scrollbar(_outer, orient="vertical", bg=BG_PANEL,
+                                troughcolor=BG_ENTRY, bd=0, width=8)
+        _vscroll.pack(side="right", fill="y")
+
+        _canvas = tk.Canvas(_outer, bg=BG_PANEL, bd=0, highlightthickness=0,
+                            yscrollcommand=_vscroll.set)
+        _canvas.pack(side="left", fill="both", expand=True)
+        _vscroll.config(command=_canvas.yview)
+
+        sidebar = tk.Frame(_canvas, bg=BG_PANEL)
+        _sid_win = _canvas.create_window((0, 0), window=sidebar, anchor="nw")
+
+        def _on_resize(e):
+            _canvas.itemconfig(_sid_win, width=e.width)
+        _canvas.bind("<Configure>", _on_resize)
+
+        def _on_frame_resize(e):
+            _canvas.configure(scrollregion=_canvas.bbox("all"))
+        sidebar.bind("<Configure>", _on_frame_resize)
+
+        # Mouse-wheel scrolling
+        def _on_wheel(e):
+            _canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        _canvas.bind_all("<MouseWheel>", _on_wheel)
+        _canvas.bind_all("<Button-4>",
+                         lambda e: _canvas.yview_scroll(-1, "units"))
+        _canvas.bind_all("<Button-5>",
+                         lambda e: _canvas.yview_scroll(1, "units"))
 
         def section(title):
             tk.Label(sidebar, text=title, font=FONT_HEAD,
-                     fg=ACCENT2, bg=BG_PANEL, anchor="w").pack(fill="x", padx=10, pady=(10, 2))
-            tk.Frame(sidebar, bg=ACCENT2, height=1).pack(fill="x", padx=10, pady=(0, 4))
+                     fg=ACCENT2, bg=BG_PANEL, anchor="w").pack(fill="x", padx=10, pady=(7, 1))
+            tk.Frame(sidebar, bg=ACCENT2, height=1).pack(fill="x", padx=10, pady=(0, 3))
 
         def entry_row(label, default, tip=""):
             row = tk.Frame(sidebar, bg=BG_PANEL)
-            row.pack(fill="x", padx=10, pady=2)
+            row.pack(fill="x", padx=10, pady=1)
             tk.Label(row, text=label, font=FONT_MAIN, fg=TEXT,
                      bg=BG_PANEL, width=16, anchor="w").pack(side="left")
             var = tk.StringVar(value=str(default))
@@ -208,10 +247,10 @@ class WilsonGUI(tk.Tk):
         row.pack(fill="x", padx=10, pady=4)
         tk.Label(row, text="Quick Preset", font=FONT_MAIN, fg=TEXT_DIM,
                  bg=BG_PANEL, width=16, anchor="w").pack(side="left")
-        self._preset_var = tk.StringVar(value="Rhodes 2023")
+        self._preset_var = tk.StringVar(value="Evoia 2021")
         cb = ttk.Combobox(row, textvariable=self._preset_var,
-                          values=["Rhodes 2023", "Evoia 2021", "Custom"],
-                          state="readonly", width=12)
+                          values=["Evoia 2021", "Rhodes 2023", "Evros 2023", "Custom"],
+                          state="readonly", width=14)
         cb.pack(side="left", fill="x", expand=True)
         cb.bind("<<ComboboxSelected>>", self._apply_preset)
 
@@ -225,7 +264,32 @@ class WilsonGUI(tk.Tk):
         self.v_maxiter      = entry_row("Max Gens",      "20",    "DE generations")
         self.v_popsize      = entry_row("Pop Size",      "12",    "Candidates/generation (>=5)")
 
-        section("Output")
+        section("Ignition Override")
+        ign_help = ("Leave blank to auto-detect ignition from FIRED/FIRMS.\n"
+                    "Set manually if auto-detect places ignition in sea/wrong location.")
+        self.v_ign_lat = entry_row("Ign Lat (N)", "", ign_help)
+        self.v_ign_lon = entry_row("Ign Lon (E)", "", ign_help)
+
+        # ── Ignition day (which FIRED day to seed from) ───────────────────
+        ign_day_row = tk.Frame(sidebar, bg=BG_PANEL)
+        ign_day_row.pack(fill="x", padx=10, pady=2)
+        tk.Label(ign_day_row, text="Ignition Day", font=FONT_MAIN, fg=TEXT,
+                 bg=BG_PANEL, width=16, anchor="w").pack(side="left")
+        self.v_ignition_day = tk.IntVar(value=1)
+        ign_day_sb = tk.Spinbox(
+            ign_day_row, textvariable=self.v_ignition_day,
+            from_=1, to=30, increment=1, width=5,
+            bg=BG_ENTRY, fg=TEXT, insertbackground=TEXT, relief="flat", bd=2,
+            font=FONT_MAIN,
+        )
+        ign_day_sb.pack(side="left", padx=(4, 0))
+        _ToolTip(ign_day_sb,
+                 "Fire day to seed ignition from (FIRED only).\n"
+                 "Day 1 = first satellite detection.\n"
+                 "Day 2+ uses that day's polygon centroids as seeds,\n"
+                 "allowing you to study later-stage spread.")
+
+
         self.v_save_plot = tk.BooleanVar(value=True)
         ttk.Checkbutton(sidebar, text="Save result figure",
                         variable=self.v_save_plot,
@@ -411,6 +475,17 @@ class WilsonGUI(tk.Tk):
         tk.Label(ctrl, textvariable=self._fire_time_var,
                  font=FONT_MONO, fg=ACCENT, bg=BG_PANEL).pack(side="right", padx=8)
 
+        # FIRED day overlay selector
+        tk.Label(ctrl, text="FIRED day:", font=FONT_MAIN,
+                 fg=TEXT_DIM, bg=BG_PANEL).pack(side="left", padx=(16, 2))
+        self._fired_day_cb = ttk.Combobox(
+            ctrl, textvariable=self._fired_day_var,
+            values=["No overlay"], state="readonly", width=22
+        )
+        self._fired_day_cb.pack(side="left")
+        self._fired_day_cb.bind("<<ComboboxSelected>>",
+                                lambda _e: self._draw_fire_frame(int(self._frame_var.get())))
+
         self._frame_var = tk.IntVar(value=0)
         self._frame_slider = tk.Scale(
             frm, from_=0, to=1, orient="horizontal",
@@ -459,6 +534,17 @@ class WilsonGUI(tk.Tk):
         # Fire simulation time (right side of control bar)
         tk.Label(ctrl, textvariable=self._fire_time_var,
                  font=("Courier New", 11, "bold"), fg=ACCENT, bg=BG_PANEL).pack(side="right", padx=8)
+
+        # FIRED day overlay selector (shared variable with Fire tab)
+        tk.Label(ctrl, text="FIRED day:", font=FONT_MAIN,
+                 fg=TEXT_DIM, bg=BG_PANEL).pack(side="left", padx=(16, 2))
+        self._fired_day_cb_hill = ttk.Combobox(
+            ctrl, textvariable=self._fired_day_var,
+            values=["No overlay"], state="readonly", width=22
+        )
+        self._fired_day_cb_hill.pack(side="left")
+        self._fired_day_cb_hill.bind("<<ComboboxSelected>>",
+                                     lambda _e: self._draw_hill_frame(int(self._hill_frame_var.get())))
 
         self._hill_frame_var = tk.IntVar(value=0)
         self._hill_slider = tk.Scale(
@@ -518,15 +604,25 @@ class WilsonGUI(tk.Tk):
         # Layer 2: elevation tint (terrain colours, semi-transparent)
         ax.imshow(land.elevation, cmap="terrain", origin="lower", alpha=0.45)
 
-        # Layer 3: fire state — glowing embers
+        # Layer 3: fire state
+        # Interior burning cells (all 8 neighbours already on fire/burned) are
+        # shown as charcoal — only the *front* ring keeps the bright orange glow.
+        from scipy.ndimage import binary_dilation, binary_erosion
         fire_rgba = np.zeros((*snap.shape, 4), dtype=np.float32)
-        fire_rgba[snap == 1] = [1.0, 0.22, 0.0, 0.90]   # active front — bright orange-red
-        fire_rgba[snap == 2] = [0.25, 0.08, 0.0, 0.65]  # burned area — dark char
-        # Add a faint glow halo around active cells (dilation by 1)
-        from scipy.ndimage import binary_dilation
-        active = snap == 1
-        glow   = binary_dilation(active, iterations=2) & ~active
-        fire_rgba[glow] = [1.0, 0.5, 0.0, 0.20]
+
+        consumed = snap > 0                                    # state 1 or 2
+        active   = snap == 1
+        # Fire front = burning cells that have at least one unburned neighbour
+        interior_burning = active & binary_erosion(consumed, structure=np.ones((3,3)))
+        front_burning    = active & ~interior_burning
+
+        fire_rgba[front_burning]    = [1.0, 0.30, 0.0, 0.92]  # active front — orange-red
+        fire_rgba[interior_burning] = [0.22, 0.07, 0.02, 0.78] # interior — dark char
+        fire_rgba[snap == 2]        = [0.18, 0.06, 0.02, 0.70] # fully burned-out — charcoal
+
+        # Faint glow halo around the front
+        glow = binary_dilation(front_burning, iterations=2) & ~active
+        fire_rgba[glow] = [1.0, 0.5, 0.0, 0.18]
         ax.imshow(fire_rgba, origin="lower")
 
         # Ignition marker
@@ -534,8 +630,11 @@ class WilsonGUI(tk.Tk):
 
         hindcast_steps = self._result.get("hindcast_steps", len(self._snapshots))
         snap_every     = max(1, hindcast_steps // 80)
+        # Use dt_fine_min (CFL-correct fine-grid step) if available, else config.dt
         import config as _cfg
-        t_min = idx * snap_every * getattr(_cfg, "dt", 1.0)
+        _best_p = self._result.get("best_params", {})
+        _dt     = float(_best_p.get("dt_fine_min", getattr(_cfg, "dt", 1.0)))
+        t_min   = idx * snap_every * _dt
 
         burned_cells = int(np.sum(snap > 0))
         import config as _cfg2
@@ -567,6 +666,26 @@ class WilsonGUI(tk.Tk):
                        alpha=0.25, origin="lower")
         except Exception:
             pass
+
+        # ── FIRED day overlay ─────────────────────────────────────────────
+        _day_label = self._fired_day_var.get()
+        _mask = self._fired_day_masks.get(_day_label)
+        if _mask is not None:
+            # Filled semi-transparent overlay + bright outline
+            _ov = np.zeros((*_mask.shape, 4), dtype=np.float32)
+            _ov[_mask] = [1.0, 0.88, 0.18, 0.35]   # yellow fill
+            ax.imshow(_ov, origin="lower", zorder=3)
+            try:
+                ax.contour(_mask.astype(np.uint8), levels=[0.5],
+                           colors=["#f9e2af"], linewidths=[2.0], origin="lower",
+                           alpha=0.95, zorder=4)
+            except Exception:
+                pass
+            ax.set_title(
+                f"Fire on terrain  |  t ~ {t_min:.0f} min  |  "
+                f"{burned_ha:.1f} ha  |  overlay: {_day_label}",
+                color=TEXT, fontsize=8
+            )
 
         self._canvas_hill.draw()
 
@@ -603,14 +722,19 @@ class WilsonGUI(tk.Tk):
             self._hill_anim_job = None
 
     def _tick_hill(self):
-        if not self._snapshots:
-            return
-        if self._hill_anim_frame >= len(self._snapshots):
-            self._hill_anim_frame = 0
-        self._hill_frame_var.set(self._hill_anim_frame)
-        self._draw_hill_frame(self._hill_anim_frame)
-        self._hill_anim_frame += 1
-        self._hill_anim_job = self.after(self._hill_speed.get(), self._tick_hill)
+        try:
+            if not self.winfo_exists():
+                return
+            if not self._snapshots:
+                return
+            if self._hill_anim_frame >= len(self._snapshots):
+                self._hill_anim_frame = 0
+            self._hill_frame_var.set(self._hill_anim_frame)
+            self._draw_hill_frame(self._hill_anim_frame)
+            self._hill_anim_frame += 1
+            self._hill_anim_job = self.after(self._hill_speed.get(), self._tick_hill)
+        except tk.TclError:
+            pass
 
     # ── Comparison tab ─────────────────────────────────────────────────────────
     def _build_compare_tab(self, frm):
@@ -1023,15 +1147,37 @@ class WilsonGUI(tk.Tk):
 
         # Write payload
         tmp = tempfile.NamedTemporaryFile(suffix=".npz", delete=False)
+        fuel_map_arr   = land.fuel_map.astype(np.int16)
+        fuel_names_arr = np.array(land.fuel_names, dtype=object)
+
+        # All ignition seeds (for multi-fire events like Evia 2021 with 2 separate
+        # ignition locations). Falls back to single primary seed for compatibility.
+        _ign_rcs_all = self._result.get("ignition_rcs", [(r0, c0)])
+        ign_rcs_arr  = np.array(_ign_rcs_all, dtype=np.int32)   # shape (K, 2)
+
+        # Time metadata so the 3D viewer can label each frame with real elapsed time.
+        # dt_fine_min = minutes per CA step on the fine grid.
+        # snap_every  = how many steps between successive snapshots.
+        # frame_dt_min = dt_fine_min * snap_every = minutes per animation frame.
+        _best = self._result.get("best_params", {})
+        _dt_fine    = float(_best.get("dt_fine_min", 1.0))
+        _hindcast_steps = int(self._result.get("hindcast_steps", len(snaps)))
+        _snap_every = max(1, _hindcast_steps // 80)
+        _frame_dt   = _dt_fine * _snap_every   # minutes of real fire time per frame
+
         np.savez_compressed(
             tmp.name,
             elevation=land.elevation.astype(np.float32),
             snapshots=snaps,
             ignition_rc=np.array([r0, c0]),
+            ignition_rcs=ign_rcs_arr,
             cell_size_m=np.float32(cell_m),
             wind_u=wu,
             wind_v=wv,
             texture_path=np.bytes_(str(texture_path).encode()),
+            fuel_map=fuel_map_arr,
+            fuel_names=fuel_names_arr,
+            frame_dt_min=np.float32(_frame_dt),   # minutes of simulated time per frame
         )
         tmp.close()
 
@@ -1056,19 +1202,35 @@ class WilsonGUI(tk.Tk):
 
     # ── Presets ────────────────────────────────────────────────────────────────
     _PRESETS = {
-        # Rhodes July 2023 — VIIRS ignition, 6-hour hindcast
-        "Rhodes 2023": dict(
-            lat_min="35.80", lat_max="36.50",
-            lon_min="27.00", lon_max="28.50",
-            date_start="2023-07-19", date_end="2023-07-22",
-        ),
         # Northern Evia megafire August 2021
         # FIRED event id = 2871   centre ≈ (38.83°N, 23.20°E)
         # FIRED window: 2021-08-01 → 2021-08-13  (12 days, ~50 000 ha)
-        "Evoia 2021":  dict(
+        # Ignition auto-detected from FIRED Day-1 convex-hull centroid + BFS land snap
+        "Evoia 2021": dict(
             lat_min="38.50", lat_max="39.10",
             lon_min="22.70", lon_max="23.70",
             date_start="2021-08-01", date_end="2021-08-13",
+            ign_lat="", ign_lon="",   # auto from FIRED day-1 convex hull
+        ),
+        # Rhodes megafire July 2023
+        # FIRED event id = 130111   centre ≈ (36.03°N, 27.92°E)
+        # FIRED window: 2023-07-18 → 2023-07-28  (10 days, tourist-area evacuation)
+        # Ignition auto-detected from FIRED Day-1 convex-hull centroid + BFS land snap
+        "Rhodes 2023": dict(
+            lat_min="35.70", lat_max="36.50",
+            lon_min="27.50", lon_max="28.50",
+            date_start="2023-07-18", date_end="2023-07-28",
+            ign_lat="", ign_lon="",   # auto from FIRED day-1 convex hull
+        ),
+        # Evros / Alexandroupolis megafire August 2023
+        # FIRED event id = 105620   centre ≈ (40.86°N, 25.77°E)
+        # FIRED window: 2023-08-16 → 2023-09-05  (18 days, deadliest fire in EU history)
+        # Ignition auto-detected from FIRED Day-1 convex-hull centroid + BFS land snap
+        "Evros 2023": dict(
+            lat_min="40.50", lat_max="41.30",
+            lon_min="25.20", lon_max="26.40",
+            date_start="2023-08-16", date_end="2023-09-05",
+            ign_lat="", ign_lon="",   # auto from FIRED day-1 convex hull
         ),
     }
 
@@ -1079,6 +1241,8 @@ class WilsonGUI(tk.Tk):
         self.v_lat_min.set(p["lat_min"]); self.v_lat_max.set(p["lat_max"])
         self.v_lon_min.set(p["lon_min"]); self.v_lon_max.set(p["lon_max"])
         self.v_date_start.set(p["date_start"]); self.v_date_end.set(p["date_end"])
+        self.v_ign_lat.set(p.get("ign_lat", ""))
+        self.v_ign_lon.set(p.get("ign_lon", ""))
 
     def _browse_shapefile(self):
         """Open a file-chooser for a Copernicus EMS .shp or .geojson file."""
@@ -1215,6 +1379,9 @@ class WilsonGUI(tk.Tk):
                     eval_callback   = _eval_cb,
                     truth_shapefile = truth_shp,
                     fired_gpkg      = fired_gpkg,
+                    ignition_day    = int(self.v_ignition_day.get()),
+                    ignition_lat_override = float(self.v_ign_lat.get()) if self.v_ign_lat.get().strip() else None,
+                    ignition_lon_override = float(self.v_ign_lon.get()) if self.v_ign_lon.get().strip() else None,
                 )
                 self._result = result
 
@@ -1248,7 +1415,13 @@ class WilsonGUI(tk.Tk):
             land         = result["landscape"]
             best         = result["best_params"]
             ignition_rc  = result["ignition_rc"]
+            # All seeds for multi-fire events (e.g. Evia 2021 had 2 separate fires)
+            ignition_rcs_all = result.get("ignition_rcs", [ignition_rc])
             hindcast_steps = result.get("hindcast_steps", 600)
+
+            # Use dt_fine_min from best_params (CFL-correct fine-grid time step).
+            # Fall back to config.dt (1.0 min) if not present.
+            dt_anim = float(best.get("dt_fine_min", 1.0))
 
             # Shallow copy avoids the "cannot pickle module" error
             # (Landscape.config is a live module object).
@@ -1262,17 +1435,58 @@ class WilsonGUI(tk.Tk):
             land_snap.set_wind(land.wind_speed * best["wind_multiplier"],
                                land.wind_dir)
 
-            sim  = CellularAutomataFire(land_snap, land_snap.config)
+            # Pass dt_anim so p_spread uses the correct Courant-safe time step
+            sim  = CellularAutomataFire(land_snap, land_snap.config, dt=dt_anim)
             r0, c0 = ignition_rc
             # Use land_snap.config — correctly reflects the resampled cell size
             cell_m = land_snap.config.CELL_SIZE_METERS
             radius = max(1, int(375 / cell_m / 2))
             rows_g, cols_g = land_snap.shape
-            for dr in range(-radius, radius + 1):
-                for dc in range(-radius, radius + 1):
-                    rr, cc = r0 + dr, c0 + dc
-                    if 0 <= rr < rows_g and 0 <= cc < cols_g:
-                        sim.ignite(rr, cc)
+
+            # ── Ignition diagnostics ──────────────────────────────────────
+            print(f"\n[DIAG] Ignition seeds: {len(ignition_rcs_all)}  "
+                  f"(grid {rows_g}×{cols_g}, cell={cell_m:.0f}m, dt={dt_anim:.4f} min/step)")
+            if 0 <= r0 < rows_g and 0 <= c0 < cols_g:
+                elev_ign = land_snap.elevation[r0, c0]
+                fuel_ign = land_snap.fuel_map[r0, c0]
+                moist_ign = land_snap.moisture[r0, c0]
+                fuel_name = (land_snap.fuel_names[fuel_ign]
+                             if hasattr(land_snap, "fuel_names")
+                             and fuel_ign < len(land_snap.fuel_names) else str(fuel_ign))
+                print(f"[DIAG] Primary seed: row={r0}, col={c0}  elevation={elev_ign:.0f}m  "
+                      f"fuel={fuel_name}  moisture={moist_ign:.3f}")
+                # Check surrounding 5×5 for combustible cells
+                combust = 0
+                for dr in range(-2, 3):
+                    for dc in range(-2, 3):
+                        rr, cc = r0+dr, c0+dc
+                        if 0 <= rr < rows_g and 0 <= cc < cols_g:
+                            fu = land_snap.fuel_map[rr, cc]
+                            fn = (land_snap.fuel_names[fu]
+                                  if hasattr(land_snap, "fuel_names")
+                                  and fu < len(land_snap.fuel_names) else "")
+                            if "non_comb" not in fn.lower() and "urban" not in fn.lower():
+                                combust += 1
+                print(f"[DIAG] Combustible cells in 5×5 neighbourhood: {combust}/25")
+                if elev_ign < 1:
+                    print("[DIAG] ⚠ WARNING: ignition cell elevation < 1m — likely over sea! "
+                          "Set 'Ign Lat/Lon' override in sidebar to move ignition to land.")
+            else:
+                print("[DIAG] ⚠ WARNING: ignition row/col is OUTSIDE the grid bounds!")
+                print(f"[DIAG]   row={r0} (must be 0–{rows_g-1}), col={c0} (must be 0–{cols_g-1})")
+            print(f"[DIAG] Best params: wind×{best['wind_multiplier']:.2f}  "
+                  f"moisture_offset={best['fuel_moisture_offset']:+.3f}")
+            print(f"[DIAG] Effective midflame wind: "
+                  f"{land.wind_speed * best['wind_multiplier']:.2f} m/s × WAF")
+            # ─────────────────────────────────────────────────────────────
+
+            # Ignite all seeds (multi-fire support)
+            for _s_r, _s_c in ignition_rcs_all:
+                for dr in range(-radius, radius + 1):
+                    for dc in range(-radius, radius + 1):
+                        rr, cc = _s_r + dr, _s_c + dc
+                        if 0 <= rr < rows_g and 0 <= cc < cols_g:
+                            sim.ignite(rr, cc)
 
             snaps = []
             snap_every = max(1, hindcast_steps // 80)
@@ -1281,14 +1495,65 @@ class WilsonGUI(tk.Tk):
                 if step % snap_every == 0:
                     snaps.append(sim.state.copy())
 
+            # Quick spread check
+            final_burned = int(np.sum(sim.state > 0))
+            if final_burned <= radius * 2:
+                print(f"[DIAG] ⚠ Fire barely spread ({final_burned} cells burned). "
+                      "Possible causes: ignition on sea, wrong fuel, moisture too high, "
+                      "wind too low. Check 'Ign Lat/Lon' override and terrain buffer.")
+            else:
+                print(f"[DIAG] ✓ Fire spread to {final_burned} cells "
+                      f"({final_burned * cell_m**2 / 1e4:.0f} ha)")
+
             self._snapshots = snaps
             burned_cells = int(np.sum(sim.state > 0))
             burned_ha    = burned_cells * cell_m**2 / 10_000
             print(f"[Animation] Captured {len(snaps)} frames  "
                   f"({burned_ha:.1f} ha burned at {cell_m:.0f} m/cell).")
+            # Populate FIRED day selector now that we know the landscape shape
+            self.after(0, lambda: self._populate_fired_day_selector(result))
         except Exception as exc:
             print(f"[Animation] Skipped: {exc}")
             import traceback; traceback.print_exc()
+
+    def _populate_fired_day_selector(self, result):
+        """Build FIRED-day dropdown options from the fired_timeline in result."""
+        fired_tl = result.get("fired_timeline")
+        land     = result.get("landscape")
+        if fired_tl is None or len(fired_tl) == 0 or land is None:
+            choices = ["No overlay"]
+            self._fired_day_masks = {}
+        else:
+            try:
+                from pipeline.fired_loader import fired_polygon_to_grid_mask as _f2g
+                fired_bbox = (result.get("fired_bbox")
+                              or result.get("bbox")
+                              or result.get("terrain_bbox"))
+                shape      = land.shape
+                dates = sorted(fired_tl["burn_date"].dt.normalize().unique())
+                self._fired_day_masks = {}
+                choices = ["No overlay"]
+                ign_date = result.get("ignition_time")
+                for i, d in enumerate(dates, start=1):
+                    day_rows = fired_tl[fired_tl["burn_date"].dt.normalize() == d]
+                    label    = f"Day {i}  ({d.strftime('%Y-%m-%d')})"
+                    try:
+                        mask = _f2g(day_rows, fired_bbox, shape)
+                        self._fired_day_masks[label] = mask.astype(bool)
+                        choices.append(label)
+                    except Exception:
+                        pass
+                print(f"[Animation] FIRED day selector populated: {len(choices)-1} days")
+            except Exception as exc:
+                print(f"[Animation] FIRED day selector error: {exc}")
+                choices = ["No overlay"]
+                self._fired_day_masks = {}
+
+        self._fired_day_var.set("No overlay")
+        for cb in (getattr(self, "_fired_day_cb", None),
+                   getattr(self, "_fired_day_cb_hill", None)):
+            if cb is not None:
+                cb.configure(values=choices)
 
     # ── Success / error callbacks ──────────────────────────────────────────────
     def _on_success(self):
@@ -1421,15 +1686,17 @@ class WilsonGUI(tk.Tk):
         axes[0, 0].legend(fontsize=7)
         self._fig_terrain.colorbar(im, ax=axes[0, 0], fraction=0.046)
 
-        # Fuel / CORINE
+        # Fuel / CORINE — colours from canonical fuel palette in fuels.py
         n = len(land.fuel_names)
-        cmap_f = ListedColormap(FUEL_COLORS[:n])
-        axes[0, 1].imshow(land.fuel_map, cmap=cmap_f, vmin=0, vmax=n - 1, origin="lower")
+        _raw_fc = _fuel_colors_for_names(land.fuel_names)          # list of (R,G,B,A) 0-255
+        _fc = [tuple(v / 255.0 for v in c) for c in _raw_fc]      # normalise to 0-1 for mpl
+        cmap_f = ListedColormap(_fc)
+        axes[0, 1].imshow(land.fuel_map, cmap=cmap_f, vmin=0, vmax=max(n - 1, 1), origin="lower")
         axes[0, 1].plot(c0, r0, "r*", ms=12)
         axes[0, 1].set_title("CORINE Fuel Map", color=TEXT, fontsize=9)
-        patches = [mpatches.Patch(color=FUEL_COLORS[i], label=land.fuel_names[i])
+        patches = [mpatches.Patch(color=_fc[i], label=land.fuel_names[i])
                    for i in range(n)]
-        axes[0, 1].legend(handles=patches, fontsize=5, loc="lower right")
+        axes[0, 1].legend(handles=patches, fontsize=5, loc="lower right", ncol=2)
 
         # Predicted vs truth
         axes[1, 0].imshow(land.elevation, cmap="gray", origin="lower", alpha=0.4)
@@ -1495,8 +1762,15 @@ class WilsonGUI(tk.Tk):
         ax.imshow(land.elevation, cmap="terrain", origin="lower", alpha=0.35)
 
         fire_rgba = np.zeros((*snap.shape, 4))
-        fire_rgba[snap == 1] = [1.0, 0.3, 0.0, 0.85]
-        fire_rgba[snap == 2] = [0.3, 0.1, 0.0, 0.60]
+        from scipy.ndimage import binary_erosion, binary_dilation as _dil
+        _consumed = snap > 0
+        _active   = snap == 1
+        _interior = _active & binary_erosion(_consumed, structure=np.ones((3, 3)))
+        _front    = _active & ~_interior
+        fire_rgba[_front]   = [1.0, 0.30, 0.0, 0.92]
+        fire_rgba[_interior]= [0.22, 0.07, 0.02, 0.78]
+        fire_rgba[snap == 2]= [0.18, 0.06, 0.02, 0.70]
+        fire_rgba[_dil(_front, iterations=2) & ~_active] = [1.0, 0.5, 0.0, 0.15]
         ax.imshow(fire_rgba, origin="lower")
         ax.plot(c0, r0, "y*", ms=10)
 
@@ -1518,6 +1792,26 @@ class WilsonGUI(tk.Tk):
             color=TEXT, fontsize=9
         )
         ax.tick_params(colors=TEXT_DIM, labelsize=7)
+
+        # ── FIRED day overlay ─────────────────────────────────────────────
+        _day_label = self._fired_day_var.get()
+        _mask = self._fired_day_masks.get(_day_label)
+        if _mask is not None:
+            _ov = np.zeros((*_mask.shape, 4), dtype=np.float32)
+            _ov[_mask] = [1.0, 0.88, 0.18, 0.35]
+            ax.imshow(_ov, origin="lower", zorder=3)
+            try:
+                ax.contour(_mask.astype(np.uint8), levels=[0.5],
+                           colors=["#f9e2af"], linewidths=[1.5], origin="lower",
+                           alpha=0.9, zorder=4)
+            except Exception:
+                pass
+            ax.set_title(
+                f"Fire Spread  t ~ {t_min:.0f} min  |  frame {idx + 1}/{len(self._snapshots)}"
+                f"  |  overlay: {_day_label}",
+                color=TEXT, fontsize=8
+            )
+
         self._canvas_fire.draw()
 
     def _seek_frame(self, val):
@@ -1538,14 +1832,19 @@ class WilsonGUI(tk.Tk):
             self._anim_job = None
 
     def _tick_anim(self):
-        if not self._snapshots:
-            return
-        if self._anim_frame >= len(self._snapshots):
-            self._anim_frame = 0
-        self._frame_var.set(self._anim_frame)
-        self._draw_fire_frame(self._anim_frame)
-        self._anim_frame += 1
-        self._anim_job = self.after(self._anim_speed.get(), self._tick_anim)
+        try:
+            if not self.winfo_exists():
+                return
+            if not self._snapshots:
+                return
+            if self._anim_frame >= len(self._snapshots):
+                self._anim_frame = 0
+            self._frame_var.set(self._anim_frame)
+            self._draw_fire_frame(self._anim_frame)
+            self._anim_frame += 1
+            self._anim_job = self.after(self._anim_speed.get(), self._tick_anim)
+        except tk.TclError:
+            pass
 
     # ── Analysis tab ──────────────────────────────────────────────────────────
     def _update_analysis_tab(self):

@@ -741,11 +741,11 @@ pip install ultralytics  # for drone vision
 
 ## 16. Known Presets
 
-| Preset | Location | Dates | Notes |
-|--------|----------|-------|-------|
-| **Evoia 2021** | Northern Evia, Greece (38.5–39.1°N, 22.7–23.7°E) | 2021-08-01 → 2021-08-13 | Largest Greek fire in recorded history; ~50,000 ha. FIRED event ID 2871 |
-| **Rhodes 2023** | Rhodes island (35.8–36.5°N, 27.0–28.5°E) | 2023-07-19 → 2023-07-22 | Major tourist-area evacuation fire |
-| **Alexandroupolis 2023** | Evros, NE Greece (40.6–41.2°N, 25.8–26.3°E) | 2023-08-21 → 2023-08-24 | Deadliest fire in EU history |
+| Preset | Location | Dates | FIRED Event ID | Notes |
+|--------|----------|-------|----------------|-------|
+| **Evoia 2021** | Northern Evia, Greece (38.5–39.1°N, 22.7–23.7°E) | 2021-08-01 → 2021-08-13 | **2871** | Largest Greek fire in recorded history; ~50,000 ha; 12 daily polygons |
+| **Rhodes 2023** | Rhodes island (35.7–36.5°N, 27.5–28.5°E) | 2023-07-18 → 2023-07-28 | **130111** | Major tourist-area evacuation fire; 10 daily polygons |
+| **Evros 2023** | Evros/Alexandroupolis, NE Greece (40.5–41.3°N, 25.2–26.4°E) | 2023-08-16 → 2023-09-05 | **105620** | Deadliest fire in EU history; 18 daily polygons (21-day burn) |
 
 ---
 

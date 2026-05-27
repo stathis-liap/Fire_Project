@@ -60,9 +60,10 @@ from scipy.ndimage import binary_dilation
 import config
 from core.landscape import Landscape
 from core.fire_model import CellularAutomataFire
+from core.fuels import fuel_colors_for_names as _fuel_colors_for_names
 from pipeline.auto_fetcher import (
     fetch_terrain_from_api, fetch_corine_land_cover, fetch_all_wildfire_data,
-    fetch_satellite_image_by_bounds,
+    fetch_satellite_image_by_bounds, fetch_osm_features,
 )
 
 _OPENTOPO_API_KEY = "57314bc7ed85882904a7485d77c0dbe5"
@@ -324,6 +325,7 @@ def fetch_weather(lat: float, lon: float,
                 "relative_humidity": float(c["relative_humidity_2m"]),
                 "wind_speed_ms":     float(c["wind_speed_10m"]),
                 "wind_direction":    float(c["wind_direction_10m"]),
+                "_dir_is_from":      True,   # Open-Meteo FROM convention
             }
         except Exception as exc:
             print(f"[WEATHER] Live fetch failed ({exc}), using config.py defaults.")
@@ -345,6 +347,7 @@ def fetch_weather(lat: float, lon: float,
                 "relative_humidity": float(row["relative_humidity"]),
                 "wind_speed_ms":     float(row["wind_speed_ms"]),
                 "wind_direction":    float(row["wind_direction"]),
+                "_dir_is_from":      True,   # ERA5 FROM convention
             }
 
             # ── Print full hourly table ─────────────────────────────────────
@@ -375,11 +378,14 @@ def fetch_weather(lat: float, lon: float,
 
 
 def _weather_from_config() -> dict:
+    # Config uses TO convention (direction fire is pushed toward) — not ERA5 FROM.
+    # Indicate this so apply_weather_to_landscape skips the +180° flip.
     return {
         "temperature_c":     float(config.TEMPERATURE_C),
         "relative_humidity": float(config.RELATIVE_HUMIDITY),
         "wind_speed_ms":     float(config.WIND_SPEED),
         "wind_direction":    float(config.WIND_DIRECTION),
+        "_dir_is_from":      False,   # already in push-toward convention
     }
 
 
@@ -403,11 +409,20 @@ def apply_weather_to_landscape(landscape: Landscape, weather: dict) -> None:
     moisture_shift = real_emc - config_emc
     landscape.moisture = np.clip(landscape.moisture + moisture_shift, 0.01, 0.30)
 
-    # Set real wind — air/air.py will apply WAF + terrain on top of this
-    landscape.set_wind(weather["wind_speed_ms"], weather["wind_direction"])
+    # Set real wind — air/air.py will apply WAF + terrain on top of this.
+    # ERA5/Open-Meteo wind_direction is the meteorological FROM direction
+    # (340° = wind blowing FROM NNW → fire pushed toward SSE = 160°).
+    # set_wind() expects the direction fire is pushed TOWARDS, so convert.
+    # The "_dir_is_from" flag is False for config-based weather (already TO).
+    if weather.get("_dir_is_from", True):
+        push_direction = (weather["wind_direction"] + 180.0) % 360.0
+    else:
+        push_direction = weather["wind_direction"]
+    landscape.set_wind(weather["wind_speed_ms"], push_direction)
     print(
         f"[LANDSCAPE] Updated: EMC={real_emc:.4f}  "
-        f"wind={weather['wind_speed_ms']:.2f} m/s @ {weather['wind_direction']:.0f} deg"
+        f"wind={weather['wind_speed_ms']:.2f} m/s  "
+        f"FROM {weather['wind_direction']:.0f}° → pushes toward {push_direction:.0f}°"
     )
 
 
@@ -709,14 +724,16 @@ class HindcastOptimizer:
 
     Hidden variables optimised
     --------------------------
-    params[0] : fuel_moisture_offset  Δm ∈ [-0.10, +0.10]
+    params[0] : fuel_moisture_offset  Δm ∈ [-0.15, 0.00]
         Added to every cell's base EMC moisture.  Negative = drier fuel
         (fire spreads faster); positive = wetter (fire slows or stops).
 
-    params[1] : wind_multiplier  k ∈ [0.5, 2.0]
+    params[1] : wind_multiplier  k ∈ [0.5, 6.0]
         Scales the global wind speed before passing it to air/air.py.
         k < 1 → calmer than reported; k > 1 → stronger than reported.
-        This corrects for anemometer placement and mesoscale errors.
+        Upper bound of 6× accounts for ERA5 10m→midflame conversion, mesoscale
+        gusts unresolved by the 0.25° grid, and pyroconvective wind enhancement
+        (relevant for large Greek megafires such as Evia 2021 and Evros 2023).
     """
 
     def __init__(
@@ -725,7 +742,7 @@ class HindcastOptimizer:
         geo_grid:         GeoGrid,
         truth_mask:       np.ndarray,
         hindcast_steps:   int,
-        ignition_rc:      tuple[int, int],
+        ignition_rcs:     list,   # list of (row, col) tuples — one per ignition seed
         eval_callback     = None,
     ):
         self.base_landscape  = base_landscape
@@ -735,7 +752,7 @@ class HindcastOptimizer:
         self.geo_grid        = geo_grid
         self.truth_mask      = truth_mask
         self.hindcast_steps  = hindcast_steps
-        self.ignition_rc     = ignition_rc
+        self.ignition_rcs    = ignition_rcs   # list of (row, col)
         self.eval_callback   = eval_callback
 
         self._eval_count   = 0
@@ -752,7 +769,8 @@ class HindcastOptimizer:
         1. Decode hidden variables from `params`.
         2. Mutate a shallow copy of the landscape (moisture + wind).
         3. Rebuild the Rothermel ROS grid (done inside CellularAutomataFire.__init__).
-        4. Ignite the GPS-mapped ignition cell.
+        4. Ignite every ignition seed cell (one per FIRED day-1 polygon centroid,
+           or a single GPS point for FIRMS/Copernicus mode).
         5. Step the CA for `hindcast_steps` iterations.
         6. Build the predicted fire mask from fire_sim.state.
         7. Compute and return the composite error.
@@ -782,16 +800,18 @@ class HindcastOptimizer:
 
         # ── Initialise simulation at State Zero ───────────────────────
         fire_sim = CellularAutomataFire(self.base_landscape, config)
-        r0, c0 = self.ignition_rc
-        # Ignite a 3-cell radius around the mapped GPS point to account for
-        # the ~375 m VIIRS pixel footprint relative to our 5 m cells.
-        radius = max(1, int(375 / config.CELL_SIZE_METERS / 2))
         rows, cols = self.base_landscape.shape
-        for dr in range(-radius, radius + 1):
-            for dc in range(-radius, radius + 1):
-                rr, cc = r0 + dr, c0 + dc
-                if 0 <= rr < rows and 0 <= cc < cols:
-                    fire_sim.ignite(rr, cc)
+
+        # Ignite a small radius around each ignition seed cell.
+        # The radius accounts for the ~375 m VIIRS pixel footprint; each
+        # FIRED centroid maps to one polygon centroid in the FIRED dataset.
+        radius = max(1, int(375 / config.CELL_SIZE_METERS / 2))
+        for (r0, c0) in self.ignition_rcs:
+            for dr in range(-radius, radius + 1):
+                for dc in range(-radius, radius + 1):
+                    rr, cc = r0 + dr, c0 + dc
+                    if 0 <= rr < rows and 0 <= cc < cols:
+                        fire_sim.ignite(rr, cc)
 
         # ── Step forward for hindcast_steps ───────────────────────────
         for _ in range(self.hindcast_steps):
@@ -840,6 +860,69 @@ class HindcastOptimizer:
 # 5.  Top-level pipeline
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _snap_ignition_to_land(ignition_rc: tuple, landscape, max_search: int = 60) -> tuple:
+    """
+    If the ignition cell is Non_Combustible (sea/urban/rock), Water, or has
+    elevation below 2 m (sea level), search an expanding ring of cells for the
+    nearest combustible land cell and return its (row, col).
+
+    Uses BFS so the returned cell is always the closest valid one.
+    """
+    r0, c0 = ignition_rc
+    rows, cols = landscape.shape
+    non_comb_idx = (landscape.fuel_names.index("Non_Combustible")
+                    if "Non_Combustible" in landscape.fuel_names else -1)
+    water_idx = (landscape.fuel_names.index("Water")
+                 if "Water" in landscape.fuel_names else -1)
+    road_idx  = (landscape.fuel_names.index("Urban_Road")
+                 if "Urban_Road" in landscape.fuel_names else -1)
+
+    def _is_land(r, c):
+        if not (0 <= r < rows and 0 <= c < cols):
+            return False
+        if landscape.elevation[r, c] < 2.0:
+            return False
+        if non_comb_idx >= 0 and landscape.fuel_map[r, c] == non_comb_idx:
+            return False
+        if water_idx >= 0 and landscape.fuel_map[r, c] == water_idx:
+            return False
+        if road_idx >= 0 and landscape.fuel_map[r, c] == road_idx:
+            return False
+        return True
+
+    if _is_land(r0, c0):
+        return ignition_rc   # already on land — no change
+
+    print(f"  [Snap] Ignition ({r0},{c0}) is on sea/non-combustible — "
+          "searching for nearest land cell …")
+
+    from collections import deque
+    visited = set()
+    queue   = deque([(r0, c0, 0)])
+    visited.add((r0, c0))
+
+    while queue:
+        r, c, dist = queue.popleft()
+        if dist > max_search:
+            break
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = r + dr, c + dc
+                if (nr, nc) in visited:
+                    continue
+                visited.add((nr, nc))
+                if _is_land(nr, nc):
+                    print(f"  [Snap] Snapped ignition to land cell ({nr},{nc})  "
+                          f"(distance {dist+1} cells)")
+                    return (nr, nc)
+                queue.append((nr, nc, dist + 1))
+
+    print(f"  [Snap] WARNING: no land cell found within {max_search} cells of ignition!")
+    return ignition_rc
+
+
 def run_hindcast(
     map_key:         str,
     lat_min:         float,
@@ -855,6 +938,9 @@ def run_hindcast(
     eval_callback    = None,
     truth_shapefile: Optional[str] = None,
     fired_gpkg:      Optional[str] = None,
+    ignition_day:    int   = 1,
+    ignition_lat_override: Optional[float] = None,
+    ignition_lon_override: Optional[float] = None,
 ) -> dict:
     """
     Full end-to-end hindcast assimilation pipeline.
@@ -876,6 +962,9 @@ def run_hindcast(
     fired_gpkg      : optional path to a FIRED daily GeoPackage (.gpkg).
                       Used as ground truth when truth_shapefile is not provided.
                       Falls back to NASA FIRMS if also absent.
+    ignition_day    : 1-indexed FIRED day to seed ignition from.  Day 1 = first
+                      satellite detection (default).  Day 2+ uses that day's
+                      polygon centroids, useful for studying later-stage spread.
 
     Truth source priority: Copernicus shapefile > FIRED GeoPackage > NASA FIRMS.
 
@@ -888,7 +977,8 @@ def run_hindcast(
     df_window     = None
     ignition_time = None
     ignition_date = date_start
-    fired_timeline = None   # populated when using FIRED truth source
+    fired_timeline = None   # full timeline for GUI day-selector overlay
+    fired_truth_window = None  # day-limited slice used for evaluation scoring
 
     using_shapefile = truth_shapefile is not None and os.path.exists(str(truth_shapefile))
     using_fired     = (
@@ -905,6 +995,7 @@ def run_hindcast(
         centre_lon  = (lon_min + lon_max) / 2
         ignition_lat = centre_lat
         ignition_lon = centre_lon
+        _ignition_latlons: list[tuple[float, float]] = [(ignition_lat, ignition_lon)]
         import datetime as _dt
         ignition_time = pd.Timestamp(date_start + " 00:00:00", tz="UTC")
         print(f"  Ignition GPS (bbox centre): ({ignition_lat:.5f}, {ignition_lon:.5f})")
@@ -914,37 +1005,57 @@ def run_hindcast(
         print("\n[1/7] FIRED GeoPackage provided — skipping NASA FIRMS fetch.")
         print(f"  Truth source : {fired_gpkg}")
 
-        # Derive ignition from the centroid of the FIRST day's FIRED polygon
-        # using the already-proven load_fired_daily pipeline (avoids tz-naive
-        # vs tz-aware comparison that silently broke the inline probe).
-        _ignition_set = False
+        _seed_date = None
+        _day_idx   = ignition_day - 1
+        _ignition_latlons: list[tuple[float, float]] = []
         try:
             from pipeline.fired_loader import (
-                load_fired_daily   as _lfd,
-                find_fire_event    as _ffe,
-                get_event_timeline as _get_tl,
+                load_fired_daily        as _lfd,
+                find_fire_event         as _ffe,
+                get_event_timeline      as _get_tl,
+                get_day1_ignition_seeds as _g1s,
             )
-            _daily    = _lfd(str(fired_gpkg), (lat_min, lat_max, lon_min, lon_max))
-            _eid      = _ffe(_daily, date_start, date_end, (lat_min, lat_max, lon_min, lon_max))
+            _daily = _lfd(str(fired_gpkg), (lat_min, lat_max, lon_min, lon_max))
+            _eid   = _ffe(_daily, date_start, date_end, (lat_min, lat_max, lon_min, lon_max))
             if _eid is not None:
-                _tl   = _get_tl(_daily, _eid)
-                _day1 = _tl.iloc[[0]]          # earliest day
-                _cen  = _day1.geometry.iloc[0].centroid
-                ignition_lat  = _cen.y
-                ignition_lon  = _cen.x
-                _ignition_set = True
-                print(f"  Ignition GPS (FIRED day-1 centroid, event {_eid}): "
-                      f"({ignition_lat:.5f}, {ignition_lon:.5f})")
+                _tl           = _get_tl(_daily, _eid)
+                _sorted_dates = sorted(_tl["burn_date"].unique())
+                _day_idx      = max(0, min(ignition_day - 1, len(_sorted_dates) - 1))
+                _seed_date    = _sorted_dates[_day_idx]
+                _seed_polys   = _tl[_tl["burn_date"] == _seed_date]
+
+                print(f"  FIRED ignition seeding from day {_day_idx + 1} "
+                      f"({_seed_date.date() if hasattr(_seed_date, 'date') else _seed_date})")
+
+                # get_day1_ignition_seeds correctly handles MultiPolygon geometries:
+                # each geometrically-separate part becomes its own ignition seed.
+                # Previously the bug: convex_hull.centroid on the whole MultiPolygon
+                # placed the seed between the two fires (e.g. in the sea for Evia).
+                _ignition_latlons = _g1s(_seed_polys, min_area_frac=0.03)
+
+                n_seeds = len(_ignition_latlons)
+                print(f"  FIRED day-{_day_idx + 1} polygons (event {_eid}): {n_seeds} ignition seed(s)")
         except Exception as _e:
             print(f"  [FIRED] Centroid probe failed ({_e}) — using bbox centre.")
 
-        if not _ignition_set:
-            ignition_lat = (lat_min + lat_max) / 2
-            ignition_lon = (lon_min + lon_max) / 2
-            print(f"  Ignition GPS (bbox centre): ({ignition_lat:.5f}, {ignition_lon:.5f})")
+        if not _ignition_latlons:
+            _ignition_latlons = [((lat_min + lat_max) / 2, (lon_min + lon_max) / 2)]
+            print(f"  Ignition GPS (bbox centre): {_ignition_latlons[0]}")
 
-        ignition_time = pd.Timestamp(date_start + " 00:00:00", tz="UTC")
-        print(f"  Ignition time (assumed)   : {ignition_time}")
+        # Primary ignition point (used for terrain download and weather fetch)
+        ignition_lat, ignition_lon = _ignition_latlons[0]
+        # Anchor ignition_time to the selected seed day so that the hindcast
+        # window, weather fetch, and truth scoring are all self-consistent.
+        if _seed_date is not None:
+            _seed_date_str = (
+                _seed_date.strftime("%Y-%m-%d")
+                if hasattr(_seed_date, "strftime")
+                else str(_seed_date)[:10]
+            )
+        else:
+            _seed_date_str = date_start
+        ignition_time = pd.Timestamp(_seed_date_str + " 00:00:00", tz="UTC")
+        print(f"  Ignition time (day {_day_idx + 1})  : {ignition_time}")
     else:
         print("\n[1/7] Fetching NASA FIRMS VIIRS data ...")
         df = fetch_firms_data(map_key, lat_min, lat_max, lon_min, lon_max,
@@ -957,8 +1068,18 @@ def run_hindcast(
         ignition_lon  = float(state_zero["longitude"])
         ignition_time = state_zero["acq_datetime"]
         ignition_date = str(ignition_time.date())
+        _ignition_latlons: list[tuple[float, float]] = [(ignition_lat, ignition_lon)]
         print(f"  Ignition GPS : ({ignition_lat:.5f}, {ignition_lon:.5f})")
         print(f"  Ignition UTC : {ignition_time}")
+
+    # ── Manual ignition override (from GUI "Ign Lat/Lon" fields) ─────────────
+    if ignition_lat_override is not None and ignition_lon_override is not None:
+        print(f"  [Override] Ignition GPS overridden: "
+              f"({ignition_lat_override:.5f}, {ignition_lon_override:.5f})")
+        ignition_lat = ignition_lat_override
+        ignition_lon = ignition_lon_override
+        # Override replaces all FIRED seeds with a single explicit point
+        _ignition_latlons = [(ignition_lat, ignition_lon)]
 
     # ── Step 2b: Fetch real weather for the ignition date ─────────────
     print("\n[3/7] Fetching real weather conditions from Open-Meteo ERA5 ...")
@@ -982,31 +1103,48 @@ def run_hindcast(
     dem_file = fetch_terrain_from_api(ignition_lat, ignition_lon,
                                       api_key=_OPENTOPO_API_KEY,
                                       buffer=terrain_buffer)
+    if dem_file:
+        dem_file = os.path.abspath(dem_file)
     corine_file = None
     satellite_file = None
+    osm_file = None
     if dem_file:
         try:
             corine_file = fetch_corine_land_cover(
-                t_lon_min, t_lat_min, t_lon_max, t_lat_max, 400, 400
+                t_lon_min, t_lat_min, t_lon_max, t_lat_max, 800, 800
             )
+            if corine_file:
+                corine_file = os.path.abspath(corine_file)
         except Exception as exc:
             print(f"[4/7] CORINE fetch failed ({exc}) — will use synthetic terrain.")
         try:
             satellite_file = fetch_satellite_image_by_bounds(
-                t_lon_min, t_lat_min, t_lon_max, t_lat_max, 400, 400
+                t_lon_min, t_lat_min, t_lon_max, t_lat_max, 800, 800
             )
+            if satellite_file:
+                satellite_file = os.path.abspath(satellite_file)
         except Exception as exc:
             print(f"[4/7] Satellite texture fetch failed ({exc}) — 3D view will use CORINE.")
+        try:
+            osm_file = fetch_osm_features(
+                t_lon_min, t_lat_min, t_lon_max, t_lat_max
+            )
+            if osm_file:
+                osm_file = os.path.abspath(osm_file)
+        except Exception as exc:
+            print(f"[4/7] OSM fetch failed ({exc}) — road/urban overlay skipped.")
 
-    # Coarse grid for DE loop: 200x200 = ~40K cells per eval (fast).
-    # Fine grid for final IoU run: 400x400 = ~160K cells (accurate).
+    # Coarse grid for DE optimizer loop: 200×200 = ~40 K cells per eval (fast).
+    # Fine grid for final IoU run: 800×800 = ~640 K cells.
+    #   COP30 native res ≈ 30 m; ±0.25° bbox ≈ 55 km → native ~1833 pixels.
+    #   800×800 samples the DEM at ~69 m — real terrain data, no artificial zoom.
     COARSE_SHAPE = (200, 200)
-    FINE_SHAPE   = (400, 400)
+    FINE_SHAPE   = (800, 800)
 
     land = Landscape(config)
     if dem_file and corine_file:
         land.load_real_terrain(dem_file=dem_file, corine_file=corine_file,
-                               target_shape=COARSE_SHAPE)
+                               target_shape=COARSE_SHAPE, osm_file=osm_file)
         print(f"[4/7] Coarse terrain loaded: {land.shape[0]}x{land.shape[1]} cells "
               f"({land.elevation.min():.0f}-{land.elevation.max():.0f} m)  "
               f"cell={land.config.CELL_SIZE_METERS:.0f} m")
@@ -1020,8 +1158,24 @@ def run_hindcast(
     # GeoGrid is tied to the TERRAIN domain, not the FIRMS search bbox.
     rows, cols = land.shape
     geo_grid   = GeoGrid(t_lat_min, t_lat_max, t_lon_min, t_lon_max, rows, cols)
-    ignition_rc = geo_grid.latlon_to_rc(ignition_lat, ignition_lon)
-    print(f"  Grid ignition cell : row={ignition_rc[0]}, col={ignition_rc[1]}")
+
+    # Problem 1 fix: save coarse cell size before the fine grid overwrites land.
+    # This is used later to rescale wind_mult so the Courant number (CFL = ROS×dt/dx)
+    # stays consistent between the coarse optimizer grid and the fine evaluation grid.
+    coarse_cell_m = land.config.CELL_SIZE_METERS
+
+    # Map every ignition (lat, lon) to a coarse-grid (row, col) and snap to land.
+    ignition_rcs = []
+    for _lat, _lon in _ignition_latlons:
+        _rc = geo_grid.latlon_to_rc(_lat, _lon)
+        _rc = _snap_ignition_to_land(_rc, land)
+        ignition_rcs.append(_rc)
+
+    # Primary ignition cell (first in list) for backwards-compatible reporting
+    ignition_rc = ignition_rcs[0]
+    print(f"  Grid ignition cells ({len(ignition_rcs)}):")
+    for _i, _rc in enumerate(ignition_rcs):
+        print(f"    seed {_i+1}: row={_rc[0]}, col={_rc[1]}")
 
     # ── Step 4: Build ground-truth mask ───────────────────────────────
     print(f"\n[5/7] Building ground-truth mask ...")
@@ -1064,32 +1218,39 @@ def run_hindcast(
             # Compute window_end for truth mask selection
             window_end = ignition_time + pd.Timedelta(hours=effective_hours)
 
-            # Select daily polygons whose burn_date ≤ window_end
+            # Select daily polygons whose burn_date ≤ window_end.
+            # FIRED stores one row per day at midnight UTC, so for a 6h hindcast
+            # window_end = ignition + 6h picks up only day-1 (burn_date = midnight
+            # of the same day).  fired_timeline retains ALL days for the GUI
+            # day-selector overlay; fired_truth_window is used for scoring.
             _in_window = fired_timeline[fired_timeline["burn_date"] <= window_end]
             if _in_window.empty:
                 # If no polygons yet in window, use the first available day
                 _in_window = fired_timeline.iloc[[0]]
+            fired_truth_window = _in_window   # day-limited slice for evaluation
 
             truth_mask  = _f2g(_in_window, fired_bbox, (rows, cols))
             truth_cells = int(truth_mask.sum())
             n_days      = len(_in_window)
 
-            print(f"  FIRED polygons in hindcast window ({hindcast_hours}h): {n_days}")
+            print(f"  FIRED polygons in hindcast window ({effective_hours:.0f}h): {n_days}")
             print(f"  Ground-truth cells (FIRED day≤{window_end.date()}): {truth_cells}  "
                   f"({truth_cells * land.config.CELL_SIZE_METERS**2 / 1e4:.1f} ha)")
 
             if truth_cells == 0:
                 print("  ⚠ FIRED returned zero burned cells for this bbox/date range.")
                 print("    Falling back to NASA FIRMS for ground truth.")
-                using_fired    = False
-                fired_timeline = None
+                using_fired        = False
+                fired_timeline     = None
+                fired_truth_window = None
         except Exception as _fired_err:
             import traceback as _tb
             print(f"  ⚠ FIRED loader error: {_fired_err}")
             _tb.print_exc()
             print("    Falling back to NASA FIRMS for ground truth.")
-            using_fired    = False
-            fired_timeline = None
+            using_fired        = False
+            fired_timeline     = None
+            fired_truth_window = None
 
         if not using_fired:
             # FIRMS fallback
@@ -1130,14 +1291,11 @@ def run_hindcast(
         truth_cells = int(truth_mask.sum())
         print(f"  Ground-truth grid cells burned : {truth_cells}")
 
-    # Use a coarser dt for optimizer evaluations to keep wall-clock time sane.
-    # dt=1.0 min/step → 630 steps for 10.5h window (vs 6300 at dt=0.1).
-    # Fire spread is smooth enough that 1-min steps give adequate accuracy.
-    OPT_DT = 1.0   # minutes per step during optimization
+    OPT_DT           = 1.0   # fixed 1 min/step
     hindcast_minutes = effective_hours * 60.0
     hindcast_steps   = int(hindcast_minutes / OPT_DT)
-    config.dt = OPT_DT   # optimizer evaluations use this dt
-    print(f"  Hindcast steps  : {hindcast_steps}  (dt={OPT_DT} min/step, "
+    config.dt        = OPT_DT
+    print(f"  Hindcast steps  : {hindcast_steps}  (dt={OPT_DT:.1f} min/step, "
           f"{effective_hours:.1f}h window)")
     evals = maxiter * popsize * 2
     cells = land.shape[0] * land.shape[1]
@@ -1147,8 +1305,8 @@ def run_hindcast(
     # ── Step 5 & 6: Optimisation ──────────────────────────────────────
     print("\n[6/7] Launching Differential Evolution optimiser ...")
     print("  Hidden variables:")
-    print("    params[0] = fuel_moisture_offset  in [-0.10,  0.00]  (drier only)")
-    print("    params[1] = wind_multiplier        in [ 0.50,  1.50]")
+    print("    params[0] = fuel_moisture_offset  in [-0.15,  0.00]  (drier only)")
+    print("    params[1] = wind_multiplier        in [ 0.50,  6.00]")
     print(f"  Generations={maxiter}, PopSize={popsize}")
     print(f"  Progress logged every 10 evaluations.\n")
 
@@ -1157,13 +1315,16 @@ def run_hindcast(
         geo_grid        = geo_grid,
         truth_mask      = truth_mask,
         hindcast_steps  = hindcast_steps,
-        ignition_rc     = ignition_rc,
+        ignition_rcs    = ignition_rcs,
         eval_callback   = eval_callback,
     )
 
     bounds = [
-        (-0.10,  0.00),   # fuel_moisture_offset: drier only (physically correct)
-        ( 0.50,  1.50),   # wind_multiplier: max 1.5× prevents unrealistic spread
+        (-0.15,  0.00),   # fuel_moisture_offset: drier only (physically correct)
+        ( 0.50,  6.00),   # wind_multiplier: up to 6× ERA5 to account for
+                          # (a) ERA5 10m→midflame reduction vs actual fire-level wind,
+                          # (b) mesoscale gusts not resolved by ERA5 0.25° grid,
+                          # (c) pyroconvective wind enhancement (Evia, Evros style fires)
     ]
 
     de_result = differential_evolution(
@@ -1191,7 +1352,7 @@ def run_hindcast(
     land_fine = Landscape(config)
     if dem_file and corine_file:
         land_fine.load_real_terrain(dem_file=dem_file, corine_file=corine_file,
-                                    target_shape=FINE_SHAPE)
+                                    target_shape=FINE_SHAPE, osm_file=osm_file)
         print(f"  Fine terrain: {land_fine.shape[0]}x{land_fine.shape[1]} cells  "
               f"cell={land_fine.config.CELL_SIZE_METERS:.0f} m")
     else:
@@ -1202,14 +1363,47 @@ def run_hindcast(
     land_fine.moisture = np.clip(
         land_fine.moisture + best_moisture_offset, 0.01, 0.30
     )
-    land_fine.set_wind(weather["wind_speed_ms"] * best_wind_mult,
-                       weather["wind_direction"])
 
-    # Rebuild GeoGrid and remap ignition + truth to fine resolution
+    # CFL-correct time-step scaling for the fine grid
+    # ─────────────────────────────────────────────────────────────────────
+    # The CA spread probability is  p = ROS × dt / dx.
+    # Rothermel ROS is a non-linear function of wind speed — scaling wind
+    # to compensate for a smaller dx corrupts the physics.  The correct fix
+    # is to scale the time step instead:
+    #
+    #   dt_fine = OPT_DT × (fine_cell_m / coarse_cell_m)
+    #
+    # This keeps  p_fine = ROS × dt_fine / dx_fine = ROS × OPT_DT / dx_coarse = p_coarse,
+    # preserving the Courant number without altering ROS or wind at all.
+    # The simulation must then run more steps to cover the same total physical
+    # time (hindcast_minutes / dt_fine steps instead of / OPT_DT steps).
+    fine_cell_m          = land_fine.config.CELL_SIZE_METERS
+    dt_fine              = OPT_DT * (fine_cell_m / coarse_cell_m)
+    hindcast_steps_fine  = max(1, int(hindcast_minutes / dt_fine))
+    print(f"  [Resolution] coarse_cell={coarse_cell_m:.0f} m  fine_cell={fine_cell_m:.0f} m")
+    print(f"  [dt scaling] OPT_DT={OPT_DT:.3f} min → dt_fine={dt_fine:.4f} min  "
+          f"({hindcast_steps} coarse steps → {hindcast_steps_fine} fine steps)")
+    print(f"  [Wind]       wind_mult unchanged at {best_wind_mult:.3f}× "
+          f"(Rothermel physics fully preserved)")
+
+    # Wind: use best_wind_mult unchanged — no grid-ratio modification.
+    # apply_weather_to_landscape already set the push-toward direction in
+    # land_fine.wind_dir, so we reuse it to avoid the FROM/TO conversion issue.
+    land_fine.set_wind(weather["wind_speed_ms"] * best_wind_mult, land_fine.wind_dir)
+
+    # Rebuild GeoGrid and remap all ignition seeds to fine resolution
     fine_rows, fine_cols = land_fine.shape
-    geo_grid_fine    = GeoGrid(t_lat_min, t_lat_max, t_lon_min, t_lon_max,
-                               fine_rows, fine_cols)
-    ignition_rc_fine = geo_grid_fine.latlon_to_rc(ignition_lat, ignition_lon)
+    geo_grid_fine = GeoGrid(t_lat_min, t_lat_max, t_lon_min, t_lon_max,
+                            fine_rows, fine_cols)
+
+    ignition_rcs_fine = []
+    for _lat, _lon in _ignition_latlons:
+        _rc = geo_grid_fine.latlon_to_rc(_lat, _lon)
+        _rc = _snap_ignition_to_land(_rc, land_fine)
+        ignition_rcs_fine.append(_rc)
+
+    # Primary ignition cell for backwards-compatible result dict / plotting
+    ignition_rc_fine = ignition_rcs_fine[0]
 
     if using_shapefile:
         # Re-rasterise the polygon at fine resolution
@@ -1220,27 +1414,34 @@ def run_hindcast(
             lon_min=t_lon_min, lon_max=t_lon_max,
         )
     elif using_fired:
-        # Re-rasterise FIRED polygons at fine resolution
+        # Re-rasterise FIRED polygons at fine resolution.
+        # Use fired_truth_window (day-limited slice) so the fine evaluation
+        # scores the same day coverage as the coarse optimisation — not the
+        # full 12-day cumulative extent which a 6h simulation can never match.
         from pipeline.fired_loader import fired_polygon_to_grid_mask as _f2g
-        fired_bbox = (t_lat_min, t_lat_max, t_lon_min, t_lon_max)
-        truth_mask_fine = _f2g(fired_timeline, fired_bbox, (fine_rows, fine_cols))
-        print(f"  [FIRED] Fine truth mask: {int(truth_mask_fine.sum())} cells")
+        fired_bbox  = (t_lat_min, t_lat_max, t_lon_min, t_lon_max)
+        _eval_polys = fired_truth_window if fired_truth_window is not None else fired_timeline
+        truth_mask_fine = _f2g(_eval_polys, fired_bbox, (fine_rows, fine_cols))
+        print(f"  [FIRED] Fine truth mask: {int(truth_mask_fine.sum())} cells  "
+              f"(windowed to {effective_hours:.0f}h, {len(_eval_polys)} day-polygon(s))")
     else:
         truth_mask_fine = geo_grid_fine.dataframe_to_grid_mask(df_window)
         truth_mask_fine = dilate_truth_mask(truth_mask_fine, land_fine.config.CELL_SIZE_METERS)
 
-    # Run final CA at fine resolution
-    final_sim = CellularAutomataFire(land_fine, config)
-    r0, c0    = ignition_rc_fine
+    # Run final CA at fine resolution — ignite all seed cells
+    # Pass dt_fine so _precompute_ros_grid uses the correct Courant-safe time step
+    # and BURN_TIME_STEPS is auto-scaled to preserve physical burn duration.
+    final_sim   = CellularAutomataFire(land_fine, config, dt=dt_fine)
     cell_m_fine = land_fine.config.CELL_SIZE_METERS
-    radius    = max(1, int(375 / cell_m_fine / 2))
-    for dr in range(-radius, radius + 1):
-        for dc in range(-radius, radius + 1):
-            rr, cc = r0 + dr, c0 + dc
-            if 0 <= rr < fine_rows and 0 <= cc < fine_cols:
-                final_sim.ignite(rr, cc)
+    radius      = max(1, int(375 / cell_m_fine / 2))
+    for (r0, c0) in ignition_rcs_fine:
+        for dr in range(-radius, radius + 1):
+            for dc in range(-radius, radius + 1):
+                rr, cc = r0 + dr, c0 + dc
+                if 0 <= rr < fine_rows and 0 <= cc < fine_cols:
+                    final_sim.ignite(rr, cc)
 
-    for _ in range(hindcast_steps):
+    for _ in range(hindcast_steps_fine):
         final_sim.step()
 
     final_mask = (final_sim.state >= 1) | (final_sim.ignition_fraction >= 0.5)
@@ -1273,11 +1474,16 @@ def run_hindcast(
     print(f"  Optimal moisture offset : {best_moisture_offset:+.4f}")
     print(f"    → Effective midflame moisture ≈ "
           f"{float(optimizer.base_moisture.mean()) + best_moisture_offset:.3f}")
-    print(f"  Optimal wind multiplier : {best_wind_mult:.3f}x")
+    print(f"  Optimal wind multiplier : {best_wind_mult:.3f}x  "
+          f"(applied unchanged on fine grid — Rothermel physics preserved)")
     print(f"    -> Effective wind speed approx "
           f"{weather['wind_speed_ms'] * best_wind_mult:.2f} m/s "
           f"(Open-Meteo measured: {weather['wind_speed_ms']:.1f} m/s @ {weather['wind_direction']:.0f} deg)")
+    print(f"  Fine grid dt          : {dt_fine:.4f} min/step  "
+          f"({hindcast_steps_fine} steps for same {hindcast_minutes:.0f} min window)")
     print()
+    print(f"  Ignition seeds    : {len(ignition_rcs_fine)} "
+          f"({'multi-point FIRED' if len(ignition_rcs_fine) > 1 else 'single GPS'})")
     print(f"  Composite error   : {best_error:.4f}")
     print(f"  Final IoU         : {final_iou * 100:.1f}%")
     print("=" * 60)
@@ -1286,27 +1492,33 @@ def run_hindcast(
         "best_params": {
             "fuel_moisture_offset": best_moisture_offset,
             "wind_multiplier":      best_wind_mult,
+            "dt_fine_min":          dt_fine,        # actual time step used on fine grid
+            "hindcast_steps_fine":  hindcast_steps_fine,
         },
-        "best_error":     best_error,
-        "iou":            final_iou,
-        "predicted_mask": final_mask,
-        "truth_mask":     truth_mask,
-        "df_firms":       df,          # None when shapefile or FIRED mode
-        "weather":        weather,
-        "ignition_rc":    ignition_rc,
-        "ignition_latlon":(ignition_lat, ignition_lon),
-        "ignition_time":  ignition_time,
-        "hindcast_steps": hindcast_steps,
-        "landscape":      land,
-        "geo_grid":       geo_grid_fine if dem_file else geo_grid,
-        "terrain_bbox":   (t_lat_min, t_lat_max, t_lon_min, t_lon_max),
-        "truth_source":   (
+        "best_error":       best_error,
+        "iou":              final_iou,
+        "predicted_mask":   final_mask,
+        "truth_mask":       truth_mask,
+        "df_firms":         df,          # None when shapefile or FIRED mode
+        "weather":          weather,
+        "ignition_rc":      ignition_rc_fine,          # primary seed (backwards compat)
+        "ignition_rcs":     ignition_rcs_fine,         # all seeds (multi-point)
+        "ignition_latlon":  (ignition_lat, ignition_lon),
+        "ignition_latlons": _ignition_latlons,         # all seeds as (lat, lon) pairs
+        "ignition_time":    ignition_time,
+        "hindcast_steps":   hindcast_steps,
+        "landscape":        land,
+        "geo_grid":         geo_grid_fine if dem_file else geo_grid,
+        "terrain_bbox":     (t_lat_min, t_lat_max, t_lon_min, t_lon_max),
+        "truth_source":     (
             "copernicus" if using_shapefile else
             "fired"      if using_fired     else
             "firms_viirs"
         ),
-        "fired_timeline": fired_timeline,   # GeoDataFrame or None
-        "texture_path":   satellite_file or corine_file,  # satellite JPG preferred; fallback CORINE PNG
+        "fired_timeline":   fired_timeline,        # full timeline for GUI day-selector
+        "fired_truth_window": fired_truth_window,  # day-limited slice used for scoring
+        "texture_path":     satellite_file or corine_file,
+        "osm_file":         osm_file,
     }
 
 
@@ -1338,6 +1550,8 @@ def plot_results(result: dict, output_path: str = "hindcast_result.png") -> None
 
     rows, cols = land.shape
     r0, c0 = ignition_rc
+    # All ignition seeds (multi-point FIRED or single point)
+    all_ignition_rcs = result.get("ignition_rcs", [ignition_rc])
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     fig.suptitle(
@@ -1350,46 +1564,54 @@ def plot_results(result: dict, output_path: str = "hindcast_result.png") -> None
         fontsize=11,
     )
 
-    # Panel 1 — DEM
+    # Panel 1 — DEM: mark all ignition seeds
     ax = axes[0, 0]
     im = ax.imshow(land.elevation, cmap="terrain", origin="lower")
-    ax.plot(c0, r0, "r*", markersize=14, label="Ignition")
+    for _i, (_sr, _sc) in enumerate(all_ignition_rcs):
+        lbl = "Ignition seeds" if _i == 0 else "_nolegend_"
+        ax.plot(_sc, _sr, "r*", markersize=14, label=lbl)
     ax.set_title("Elevation (m)")
     ax.set_xlabel("Col (W→E)"); ax.set_ylabel("Row (S→N)")
     fig.colorbar(im, ax=ax, fraction=0.046)
     ax.legend(fontsize=8)
 
-    # Panel 2 — Fuel map
+    # Panel 2 — Fuel map: mark all ignition seeds
     ax = axes[0, 1]
-    fuel_colors = ["#228B22","#8B4513","#556B2F","#DAA520","#90EE90","#D3D3D3","#4682B4"]
     n_fuels = len(land.fuel_names)
-    cmap_fuel = ListedColormap(fuel_colors[:n_fuels])
-    im2 = ax.imshow(land.fuel_map, cmap=cmap_fuel, vmin=0, vmax=n_fuels-1, origin="lower")
-    ax.plot(c0, r0, "r*", markersize=14)
+    # Use canonical per-fuel colours from fuels.py (same as 3D viewer).
+    # Returns (R,G,B,A) 0-255 tuples; matplotlib needs 0-1 floats.
+    _raw_colors = _fuel_colors_for_names(land.fuel_names)
+    fuel_colors = [tuple(v / 255.0 for v in c) for c in _raw_colors]
+    cmap_fuel = ListedColormap(fuel_colors)
+    im2 = ax.imshow(land.fuel_map, cmap=cmap_fuel, vmin=0, vmax=max(n_fuels - 1, 1), origin="lower")
+    for _sr, _sc in all_ignition_rcs:
+        ax.plot(_sc, _sr, "r*", markersize=14)
     ax.set_title("CORINE Fuel Map")
     ax.set_xlabel("Col"); ax.set_ylabel("Row")
     patches = [mpatches.Patch(color=fuel_colors[i], label=land.fuel_names[i])
                for i in range(n_fuels)]
-    ax.legend(handles=patches, fontsize=6, loc="lower right")
+    ax.legend(handles=patches, fontsize=6, loc="lower right", ncol=2)
 
-    # Panel 3 — Predicted vs truth outlines
+    # Panel 3 — Predicted vs truth outlines: mark all ignition seeds
     ax = axes[1, 0]
     ax.imshow(land.elevation, cmap="gray", origin="lower", alpha=0.5)
-    # truth = red, predicted = blue, semi-transparent fills
     truth_overlay = np.zeros((*land.shape, 4), dtype=float)
     truth_overlay[truth_mask] = [1, 0, 0, 0.6]
     pred_overlay = np.zeros((*land.shape, 4), dtype=float)
     pred_overlay[pred_mask]  = [0, 0.4, 1, 0.4]
     ax.imshow(truth_overlay,  origin="lower")
     ax.imshow(pred_overlay,   origin="lower")
-    ax.plot(c0, r0, "y*", markersize=14, label="Ignition")
-    red_p  = mpatches.Patch(color=[1,0,0,0.6], label=f"FIRMS truth ({truth_mask.sum()} cells)")
+    for _i, (_sr, _sc) in enumerate(all_ignition_rcs):
+        lbl = f"Ignition ({len(all_ignition_rcs)} seeds)" if _i == 0 else "_nolegend_"
+        ax.plot(_sc, _sr, "y*", markersize=14, label=lbl)
+    truth_source = result.get("truth_source", "truth")
+    red_p  = mpatches.Patch(color=[1,0,0,0.6], label=f"{truth_source} truth ({truth_mask.sum()} cells)")
     blue_p = mpatches.Patch(color=[0,0.4,1,0.6], label=f"Predicted ({pred_mask.sum()} cells)")
     ax.legend(handles=[red_p, blue_p], fontsize=8)
-    ax.set_title("Predicted (blue) vs FIRMS Truth (red)")
+    ax.set_title("Predicted (blue) vs Truth (red)")
     ax.set_xlabel("Col"); ax.set_ylabel("Row")
 
-    # Panel 4 — Overlap breakdown
+    # Panel 4 — Overlap breakdown: mark all ignition seeds
     ax = axes[1, 1]
     ax.imshow(land.elevation, cmap="gray", origin="lower", alpha=0.5)
     tp = pred_mask & truth_mask
@@ -1400,7 +1622,9 @@ def plot_results(result: dict, output_path: str = "hindcast_result.png") -> None
     overlay[fp] = [0, 0.3, 1,   0.6]   # blue   = over-prediction
     overlay[fn] = [1, 0,   0,   0.8]   # red    = miss
     ax.imshow(overlay, origin="lower")
-    ax.plot(c0, r0, "y*", markersize=14, label="Ignition")
+    for _i, (_sr, _sc) in enumerate(all_ignition_rcs):
+        lbl = "Seeds" if _i == 0 else "_nolegend_"
+        ax.plot(_sc, _sr, "y*", markersize=14, label=lbl)
     ax.legend(handles=[
         mpatches.Patch(color=[0,0.8,0,0.8], label=f"True Pos  {tp.sum()}"),
         mpatches.Patch(color=[0,0.3,1,0.6], label=f"False Pos {fp.sum()}"),

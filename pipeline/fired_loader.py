@@ -12,15 +12,32 @@ import pandas as pd
 
 FIRED_DOWNLOAD_URL = "https://scholar.colorado.edu/collections/pz50gx05h"
 
-# Known FIRED event IDs confirmed by sinusoidal→WGS84 back-projection
-EVIA_2021_EVENT_ID = 2871   # Northern Evia megafire, Aug 2021, centre 38.83°N 23.20°E
+# Known FIRED event IDs confirmed by sinusoidal→WGS84 back-projection from events CSV
+EVIA_2021_EVENT_ID   = 2871    # Northern Evia megafire,   Aug 2021, centre 38.83°N 23.20°E
+RHODES_2023_EVENT_ID = 130111  # Rhodes megafire,          Jul 2023, centre 36.03°N 27.92°E
+EVROS_2023_EVENT_ID  = 105620  # Evros/Alexandroupolis,    Aug 2023, centre 40.86°N 25.77°E
 
 KNOWN_FIRE_EVENTS = {
     "Evoia 2021": {
         "event_id":   EVIA_2021_EVENT_ID,
         "lat_centre": 38.83, "lon_centre": 23.20,
+        "bbox":       (38.50, 39.10, 22.70, 23.70),
         "date_start": "2021-08-01", "date_end": "2021-08-13",
-        "note":       "Northern Evia megafire — ~50 000 ha",
+        "note":       "Northern Evia megafire — ~50 000 ha, 12 daily polygons",
+    },
+    "Rhodes 2023": {
+        "event_id":   RHODES_2023_EVENT_ID,
+        "lat_centre": 36.03, "lon_centre": 27.92,
+        "bbox":       (35.70, 36.50, 27.50, 28.50),
+        "date_start": "2023-07-18", "date_end": "2023-07-28",
+        "note":       "Rhodes megafire — 10 daily polygons, massive tourist-area evacuation",
+    },
+    "Evros 2023": {
+        "event_id":   EVROS_2023_EVENT_ID,
+        "lat_centre": 40.86, "lon_centre": 25.77,
+        "bbox":       (40.50, 41.30, 25.20, 26.40),
+        "date_start": "2023-08-16", "date_end": "2023-09-05",
+        "note":       "Evros/Alexandroupolis megafire — 18 daily polygons, deadliest in EU history",
     },
 }
 
@@ -189,6 +206,106 @@ def get_event_timeline(daily_gdf, event_id):
     print("[FIRED] Timeline: {} polygons ({} -> {})".format(
         len(tl), tl["burn_date"].min().date(), tl["burn_date"].max().date()))
     return tl
+
+
+def get_day1_ignition_seeds(day1_gdf, min_area_frac=0.03):
+    """Extract ignition-seed (lat, lon) centroids from the FIRED day-1 polygons.
+
+    FIRED stores each daily burn perimeter as a single row whose geometry may be
+    a MultiPolygon.  For large fires that started in multiple separate locations
+    on the same day (e.g. Northern Evia 2021: two separate ignitions ~14 km
+    apart), the MultiPolygon parts represent distinct fire fronts that should
+    each receive their own CA ignition seed.
+
+    The current-code bug: calling `convex_hull.centroid` on the whole
+    MultiPolygon envelope places the single seed between the two fires —
+    sometimes in the sea or in a valley — and the CA never produces the
+    correct two-lobe burn pattern.
+
+    This function returns one (lat, lon) per significant polygon part:
+      • For a single Polygon row  → 1 seed at the convex-hull centroid.
+      • For a MultiPolygon row    → 1 seed per part whose area ≥ min_area_frac
+        of the total day-1 burned area.  Tiny satellite noise fragments
+        (often < 1 % of total area) are discarded.
+
+    Parameters
+    ----------
+    day1_gdf      : GeoDataFrame — rows where burn_date == first day.
+                    May contain multiple rows if the GeoPackage stores one row
+                    per polygon (some FIRED versions) rather than one row per
+                    MultiPolygon (most common).
+    min_area_frac : Minimum fraction of total day-1 area for a part to qualify
+                    as a distinct ignition seed.  Default 0.03 (3 %) keeps
+                    meaningful sub-fires while dropping MODIS noise pixels.
+
+    Returns
+    -------
+    list of (lat, lon) tuples, length >= 1.  Sorted west→east for
+    deterministic ordering.
+
+    Examples
+    --------
+    Evia 2021 day-1:  1 row, MultiPolygon(2 parts 50%/50%)
+        → [(38.81875, 23.22293), (38.82292, 23.36869)]   two seeds ~14 km apart
+
+    Rhodes 2023 day-1: 1 row, MultiPolygon (3 parts, various sizes)
+        → depends on min_area_frac filter
+    """
+    try:
+        from shapely.geometry import MultiPolygon as _MP, Polygon as _Poly
+    except ImportError as exc:
+        raise ImportError("shapely is required: pip install shapely") from exc
+
+    # Collect all parts with their area (in geographic degrees² — only used
+    # for relative comparison, so no projection needed here).
+    parts_with_area = []
+    for _, row in day1_gdf.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
+            continue
+        if isinstance(geom, _MP):
+            for part in geom.geoms:
+                if not part.is_empty:
+                    parts_with_area.append((part, part.area))
+        elif isinstance(geom, _Poly):
+            parts_with_area.append((geom, geom.area))
+        else:
+            # GeometryCollection or other — try iterating
+            try:
+                for sub in geom.geoms:
+                    if not sub.is_empty:
+                        parts_with_area.append((sub, sub.area))
+            except AttributeError:
+                parts_with_area.append((geom, geom.area))
+
+    if not parts_with_area:
+        return []
+
+    total_area = sum(a for _, a in parts_with_area)
+    threshold  = total_area * min_area_frac
+
+    seeds = []
+    for part, area in parts_with_area:
+        if area >= threshold:
+            cen = part.convex_hull.centroid
+            seeds.append((cen.y, cen.x))
+
+    # If ALL parts were filtered (e.g. all equally tiny), fall back to
+    # using the single largest part.
+    if not seeds:
+        largest_part = max(parts_with_area, key=lambda x: x[1])[0]
+        cen = largest_part.convex_hull.centroid
+        seeds.append((cen.y, cen.x))
+
+    # Sort west→east (ascending longitude) for deterministic ordering.
+    seeds.sort(key=lambda x: x[1])
+
+    n = len(seeds)
+    print("[FIRED] Day-1 ignition seeds: {}  (min_area_frac={:.0%})".format(n, min_area_frac))
+    for i, (lat, lon) in enumerate(seeds):
+        print("  seed {}: ({:.5f}N, {:.5f}E)".format(i + 1, lat, lon))
+
+    return seeds
 
 
 def fired_polygon_to_grid_mask(polygon_gdf, dem_bounds, grid_shape):

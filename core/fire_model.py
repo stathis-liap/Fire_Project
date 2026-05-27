@@ -39,16 +39,35 @@ class CellularAutomataFire:
     Fully Vectorized, Deterministic Rothermel CA Fire Spread Model.
     """
 
-    def __init__(self, landscape, config):
+    def __init__(self, landscape, config, dt: float = None):
+        """
+        Parameters
+        ----------
+        landscape : Landscape
+        config    : module / object with CELL_SIZE_METERS, BURN_TIME_STEPS, dt, …
+        dt        : override time-step in minutes per CA step.
+                    Defaults to config.dt when None.
+                    Pass a smaller value (dt_fine) on the fine-resolution evaluation
+                    grid to keep the Courant number CFL = ROS × dt / dx constant
+                    relative to the coarse optimisation grid without touching ROS.
+        """
         self.landscape = landscape
         self.config    = config
-        
+
         rows, cols = landscape.shape
         self.state             = np.zeros((rows, cols), dtype=np.int8)
         self.burn_timer        = np.zeros((rows, cols), dtype=np.float32)
-        self.ignition_fraction = np.zeros((rows, cols), dtype=np.float32) # Replaces randomness
+        self.ignition_fraction = np.zeros((rows, cols), dtype=np.float32)
 
-        self.dt = config.dt if hasattr(config, 'dt') else 0.1   
+        config_dt = config.dt if hasattr(config, 'dt') else 0.1
+        self.dt   = dt if dt is not None else config_dt
+
+        # Scale BURN_TIME_STEPS so each cell burns for the same physical duration
+        # regardless of step size.  At config_dt a cell burns for
+        # BURN_TIME_STEPS × config_dt minutes; at a shorter dt we need
+        # proportionally more steps to match the same real-time fire duration.
+        base_bts = config.BURN_TIME_STEPS if hasattr(config, 'BURN_TIME_STEPS') else 60
+        self._burn_time_steps = max(1, int(round(base_bts * config_dt / self.dt)))
 
         self._neighbors = [
             (-1, 0), (1,  0), (0, -1), (0,  1),
@@ -63,7 +82,7 @@ class CellularAutomataFire:
         """Set a single cell alight."""
         if self.state[r, c] == 0:
             self.state[r, c] = 1
-            self.burn_timer[r, c] = self.config.BURN_TIME_STEPS
+            self.burn_timer[r, c] = self._burn_time_steps
 
 
     def _precompute_ros_grid(self) -> None:
@@ -214,7 +233,7 @@ class CellularAutomataFire:
         ignited = unburned_mask & (self.ignition_fraction >= 1.0)
 
         self.state[ignited] = 1
-        self.burn_timer[ignited] = self.config.BURN_TIME_STEPS
+        self.burn_timer[ignited] = self._burn_time_steps
         self.ignition_fraction[ignited] = 0.0  # Reset heat
 
         # 4. Monte Carlo Spotting: firebrands lofted from the active front,
