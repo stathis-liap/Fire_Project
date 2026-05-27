@@ -11,6 +11,7 @@ A drone-assisted wildfire digital twin for the Mediterranean. WILSON ingests rea
 1. [Architecture Overview](#1-architecture-overview)
 2. [Project Structure](#2-project-structure)
 3. [Quick Start](#3-quick-start)
+   - 3.5 Recent Changes
 4. [Data Acquisition Pipeline](#4-data-acquisition-pipeline)
    - 4.1 NASA FIRMS — Active Fire Detections
    - 4.2 Copernicus COP30 DEM — Terrain
@@ -160,6 +161,67 @@ python pipeline/hindcast_optimizer.py \
 
 ---
 
+## 3.5 Recent Changes
+
+### Multi-Point Ignition (FIRED MultiPolygon support)
+
+Large fires frequently start as **two or more separate ignition events** on the same calendar day. For example, the Evia 2021 megafire had two independent ignition fronts 12.6 km apart; using a single centroid of their combined `MultiPolygon` placed the ignition in the Euboean Gulf (sea).
+
+**What changed (`pipeline/fired_loader.py`, `pipeline/hindcast_optimizer.py`):**
+
+- New function `get_day1_ignition_seeds(gdf, min_area_frac=0.03)` iterates the individual polygon parts of any `MultiPolygon` FIRED geometry, filters noise fragments smaller than 3% of the total area (single MODIS pixels), and returns one `(lat, lon)` centroid per significant part.
+- The hindcast optimizer now calls this instead of the old `convex_hull.centroid` — so Evia 2021 correctly starts with **2 seeds**, one for each fire origin.
+- All seeds are passed through the full pipeline: DE optimization, fine-grid final run, 2D animation, and the 3D viewer each ignite every seed independently.
+
+```
+Evia 2021 day-1 MultiPolygon → 2 seeds:
+  seed 1: 38.830°N, 23.120°E  (western fire)
+  seed 2: 38.815°N, 23.290°E  (eastern fire, 12.6 km away)
+```
+
+---
+
+### Ignition Day Selector
+
+By default WILSON seeds ignition from the **first FIRED day** (day 1). You can now choose any day:
+
+- A **"Ignition Day"** spinbox (1–30) appears in the GUI sidebar under "Ignition Override".
+- Selecting day 2 or later uses that day's polygon centroids as ignition seeds, allowing you to study how a partially-established fire perimeter continues to spread.
+- The hindcast window, weather fetch, and truth-mask scoring are all anchored to the selected day's date — the simulation and comparison are fully self-consistent.
+
+---
+
+### OSM Roads & Urban Areas (improved ingestion)
+
+**Source:** OpenStreetMap via Overpass API  
+**Module:** `pipeline/auto_fetcher.py → fetch_osm_features()`  
+**Applied in:** `core/landscape.py → apply_osm_overlay()`
+
+Roads (highways) and urban landuse areas from OSM are overlaid on the fuel map as slow-burning `Urban Road` and `Urban Fabric` fuel types. Two bugs were fixed:
+
+| Bug | Symptom | Fix |
+|-----|---------|-----|
+| **Relation types ignored** | Large city districts and industrial zones (stored as OSM *relation* multipolygons) were silently skipped | Parser now handles both `way` and `relation` types; outer-ring member geometries are stitched into a single polygon |
+| **Roads too wide** | The road raster buffer was `cell_size × 0.4` ≈ 50–110 m — far wider than a real road | Reduced multiplier to `0.15` → roads are ~1 cell wide, acting as thin firebreaks rather than broad barriers |
+
+The Overpass POST request now also sends the correct `Content-Type: application/x-www-form-urlencoded` header, fixing the `406 Not Acceptable` errors from the primary endpoints.
+
+---
+
+### Fire Visualisation: Front vs. Burned Interior
+
+The 2D animation and 3D viewer now distinguish three visual states:
+
+| Visual | Meaning | Colour |
+|--------|---------|--------|
+| Bright orange ring | Active fire **front** (cells with ≥1 unburned neighbour) | `[255, 160, 10]` |
+| Dark charcoal interior | Burning cells fully surrounded by fire — visually consumed | `[60, 15, 5]` |
+| Fading charcoal | Fully burned-out (`state=2`) — darkens with age | `[180→20, 40→10, 0→8]` |
+
+This uses `scipy.ndimage.binary_erosion` on the consumed mask — no physics changed.
+
+---
+
 ## 4. Data Acquisition Pipeline
 
 ### 4.1 NASA FIRMS — Active Fire Detections
@@ -285,7 +347,7 @@ FIRED (Fire Events Delineation) provides daily burned-area polygons derived from
 - Duration: 2021-08-01 → 2021-08-13 (12 daily polygons)  
 - Total area: ~43,047 ha (430 km²)
 
-**Ignition point:** Instead of using the bbox centre (which falls in the Euripus strait — sea), WILSON extracts the centroid of the **first day's polygon** as the ignition point. This guarantees the ignition lands on the actual burn scar on land.
+**Ignition point:** WILSON uses `get_day1_ignition_seeds()` to extract one centroid per geometrically-separate polygon part in the selected day's FIRED geometry. This correctly handles `MultiPolygon` events (e.g. Evia 2021 with 2 separate fires 12.6 km apart) — see [§3.5 Recent Changes](#35-recent-changes) for details.
 
 ---
 
