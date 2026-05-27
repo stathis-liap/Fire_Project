@@ -434,7 +434,7 @@ GREEK_FUELS = {
 # Fuels that cannot sustain fire propagation (w0 = 0 or structurally inert).
 # Landscape.get_fuel_at() returns {} for all of these; fire_model.py suppresses
 # them via the valid_fuel = (w0 > 0) mask in _precompute_ros_grid().
-NON_BURNING_FUELS = {"Water"}
+NON_BURNING_FUELS = {"Water", "Urban_Fabric", "Urban_Road", "Non_Combustible"}
 
 # Fuels treated as non-combustible by the landscape (appended outside GREEK_FUELS
 # by Landscape.__init__ so the model never looks them up in this dict).

@@ -102,6 +102,7 @@ class Landscape:
         self.wind_dir = 0
         self.wind_u = 0
         self.wind_v = 0
+        self.osm_overlay_stats = None
 
     def calculate_emc(self, temp_c, rh):
         """
@@ -137,9 +138,14 @@ class Landscape:
                           np.sin(X/2) * 20 + 50) 
 
         # 2. Fuel Patch Logic (Voronoi/Nearest Neighbor Seeds)
-        num_fuels = len(self.fuel_names)
+        # Only use combustible fuel types so the synthetic scenario always burns.
+        _non_burn = {"Non_Combustible", "Water"}
+        comb_indices = [i for i, n in enumerate(self.fuel_names) if n not in _non_burn]
+        if not comb_indices:
+            comb_indices = list(range(len(self.fuel_names)))
         seeds_coords = np.random.rand(num_patches, 2) * [rows, cols]
-        seeds_fuels = np.random.randint(0, num_fuels, size=num_patches)
+        seeds_fuels = np.array([comb_indices[i % len(comb_indices)]
+                                for i in np.random.randint(0, len(comb_indices), size=num_patches)])
         
         tree = KDTree(seeds_coords)
         all_coords = np.argwhere(np.ones(self.shape))
@@ -391,18 +397,15 @@ class Landscape:
         urban_geoms = []
         road_geoms  = []
 
-        # Buffer roads by 0.4 × cell width (geographic degrees) so a typical
-        # 6–8 m road covers at least 1 pixel even at 69 m resolution.
-        cell_deg_lon = (lon_max - lon_min) / cols
-        road_buf_deg = cell_deg_lon * 0.15
-
         for feat in geojson.get("features", []):
             ft   = feat["properties"].get("feature_type", "")
             geom = _shape(feat["geometry"])
             if ft == "urban" and urban_idx >= 0:
                 urban_geoms.append(geom)
             elif ft == "road" and road_idx >= 0:
-                road_geoms.append(geom.buffer(road_buf_deg))
+                # Keep roads as true centerlines so rasterization is 1-cell wide.
+                # Width expansion (buffer) is intentionally disabled.
+                road_geoms.append(geom)
 
         overlay = np.zeros((rows, cols), dtype=np.int32)
 
@@ -418,7 +421,7 @@ class Landscape:
             burn = _rasterize(
                 [(g, road_idx) for g in road_geoms],
                 out_shape=(rows, cols), transform=transform,
-                fill=0, dtype=np.int32,
+                fill=0, dtype=np.int32, all_touched=False,
             )
             overlay = np.where(burn > 0, burn, overlay)
 
@@ -429,6 +432,7 @@ class Landscape:
 
         n_road  = int((self.fuel_map == road_idx).sum())  if road_idx  >= 0 else 0
         n_urban = int((self.fuel_map == urban_idx).sum()) if urban_idx >= 0 else 0
+        self.osm_overlay_stats = {"road_cells": n_road, "urban_cells": n_urban}
         print(f"[Landscape] OSM overlay applied: {n_urban:,} urban cells, "
               f"{n_road:,} road cells")
 
@@ -454,11 +458,9 @@ class Landscape:
         """Returns the dictionary of fuel properties for a specific cell.
         Returns empty dict for cells that cannot sustain surface fire propagation:
         Non_Combustible (roads surface, bare rock, urban hard surfaces) and
-        Water (fuel_load=0 also suppresses spread in fire_model via valid_fuel mask).
-        Urban_Fabric and Urban_Road have very low but non-zero w0 and are handled
-        by the Rothermel model naturally — they spread fire extremely slowly."""
+        Water (fuel_load=0 also suppresses spread in fire_model via valid_fuel mask)."""
         fuel_idx  = self.fuel_map[r, c]
         fuel_name = self.fuel_names[fuel_idx]
-        if fuel_name in ("Non_Combustible", "Water"):
+        if fuel_name in ("Non_Combustible", "Water", "Urban_Fabric", "Urban_Road"):
             return {}
         return GREEK_FUELS[fuel_name]

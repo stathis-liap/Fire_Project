@@ -528,26 +528,64 @@ def fetch_osm_features(west, south, east, north, output_dir=".", force=False):
         "https://overpass.kumi.systems/api/interpreter",
     ]
 
-    # Overpass requires Content-Type: application/x-www-form-urlencoded.
-    # A plain requests.post(data=...) usually sends this, but some servers
-    # return 406 if the Accept header includes anything they can't satisfy.
+    # Overpass expects the query as the "data" form field (or GET ?data=...).
+    # Some mirrors return HTTP 406 when the body isn't form-encoded correctly.
     _headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
+        "Accept": "*/*",
+        "User-Agent": "Project-WILSON/1.0 (+local)",
     }
 
     raw_data = None
     for endpoint in overpass_endpoints:
         try:
-            resp = requests.post(endpoint, data=query.encode("utf-8"),
-                                 headers=_headers, timeout=120)
+            # Primary: canonical form-encoded POST
+            resp = requests.post(
+                endpoint,
+                data={"data": query},
+                headers=_headers,
+                timeout=120,
+            )
             resp.raise_for_status()
             raw_data = resp.json()
             print(f"[Fetcher] OSM data received ({len(raw_data.get('elements', []))} "
                   f"elements) from {endpoint}")
             break
         except Exception as exc:
-            print(f"[Fetcher]   {endpoint} → {exc}")
+            # Fallback 1: GET with query param (works on some mirrors/CDN paths)
+            try:
+                resp = requests.get(
+                    endpoint,
+                    params={"data": query},
+                    headers=_headers,
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                raw_data = resp.json()
+                print(f"[Fetcher] OSM data received ({len(raw_data.get('elements', []))} "
+                      f"elements) from {endpoint} [GET fallback]")
+                break
+            except Exception as exc2:
+                # Fallback 2: raw-text POST for stricter parsers
+                try:
+                    resp = requests.post(
+                        endpoint,
+                        data=query,
+                        headers={**_headers, "Content-Type": "text/plain; charset=utf-8"},
+                        timeout=120,
+                    )
+                    resp.raise_for_status()
+                    raw_data = resp.json()
+                    print(f"[Fetcher] OSM data received ({len(raw_data.get('elements', []))} "
+                          f"elements) from {endpoint} [raw POST fallback]")
+                    break
+                except Exception as exc3:
+                    snippet = ""
+                    try:
+                        snippet = (resp.text or "")[:200].replace("\n", " ")
+                    except Exception:
+                        pass
+                    print(f"[Fetcher]   {endpoint} → {exc} | {exc2} | {exc3}"
+                          f"{' | body: ' + snippet if snippet else ''}")
 
     if raw_data is None:
         print("[Fetcher] WARNING — all Overpass endpoints unreachable; OSM overlay skipped.")
@@ -842,4 +880,3 @@ def _fetch_firms_orchestrator(map_key, lat_min, lat_max, lon_min, lon_max,
             continue
 
     return _pd.DataFrame()
-

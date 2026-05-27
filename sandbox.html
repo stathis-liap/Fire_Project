@@ -1,0 +1,1506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project WILSON — Sandbox</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.css" />
+  <script src="https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #0d0d0f; color: #cdd6f4;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    #map { position: absolute; inset: 0; }
+
+    /* ── Canvas overlays ─────────────────────────────────────────────────── */
+    #atmo-overlay {
+      position: absolute; inset: 0; pointer-events: none; z-index: 10;
+      transition: background-color 8s linear;
+    }
+    #glow-canvas  { position: absolute; inset: 0; pointer-events: none; z-index: 15; width: 100%; height: 100%; mix-blend-mode: screen; }
+    #smoke-canvas { position: absolute; inset: 0; pointer-events: none; z-index: 20; width: 100%; height: 100%; mix-blend-mode: multiply; opacity: 0.9; }
+    #wind-canvas  { position: absolute; inset: 0; pointer-events: none; z-index: 12; width: 100%; height: 100%; mix-blend-mode: screen; opacity: 0.85; }
+
+    /* ── Weather strip ───────────────────────────────────────────────────── */
+    #weather-strip {
+      position: absolute; top: 0; left: 0; right: 0;
+      display: none; align-items: center; gap: 16px;
+      padding: 5px 16px;
+      background: rgba(17,17,27,0.85);
+      border-bottom: 1px solid rgba(137,180,250,0.12);
+      backdrop-filter: blur(8px);
+      z-index: 110; pointer-events: none;
+      font-size: 11.5px; color: #a6adc8; white-space: nowrap;
+    }
+    #weather-strip.visible { display: flex; }
+    #ws-time     { font-weight: 700; color: #89b4fa; }
+    #ws-wallclock{ font-weight: 700; color: #a6e3a1; font-size: 11px; }
+    #ws-arrow    { display: inline-block; font-size: 15px; transition: transform 2s ease; }
+
+    /* ── Control panel ───────────────────────────────────────────────────── */
+    #panel {
+      position: absolute; top: 14px; left: 14px;
+      width: 270px; max-height: calc(100vh - 100px);
+      background: rgba(17,17,27,0.93);
+      border: 1px solid rgba(137,180,250,0.18);
+      border-radius: 10px; padding: 14px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 32px rgba(0,0,0,0.55);
+      z-index: 100; overflow-y: auto; user-select: none;
+    }
+    #panel::-webkit-scrollbar { width: 4px; }
+    #panel::-webkit-scrollbar-thumb { background: #313244; border-radius: 2px; }
+    #panel h1 {
+      font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;
+      color: #89b4fa; margin-bottom: 10px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    #panel h1 span.flame { font-size: 16px; }
+    .sect-label {
+      font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+      color: #585b70; margin: 10px 0 5px;
+    }
+    .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+    .row label { font-size: 11.5px; color: #a6adc8; flex: 1; }
+    .row input[type="number"],
+    .row input[type="text"],
+    .row input[type="date"],
+    .row input[type="time"] {
+      width: 80px; background: #1e1e2e; border: 1px solid #313244;
+      border-radius: 5px; color: #cdd6f4; font-size: 12px;
+      padding: 3px 6px; outline: none;
+      transition: border-color 0.15s; text-align: right;
+    }
+    .row input:focus { border-color: #89b4fa; }
+    .row .unit { font-size: 10px; color: #585b70; margin-left: 4px; min-width: 22px; }
+
+    /* ── Mode buttons ────────────────────────────────────────────────────── */
+    #mode-toggle { display: flex; gap: 4px; margin-bottom: 6px; }
+    #mode-toggle button {
+      flex: 1; padding: 5px 2px; font-size: 10.5px;
+      border: 1px solid #313244; border-radius: 6px;
+      background: #1e1e2e; color: #a6adc8;
+      cursor: pointer; transition: background 0.15s, color 0.15s; white-space: nowrap;
+    }
+    #mode-toggle button.active-ignite    { background: #f38ba8; border-color: #f38ba8; color: #1e1e2e; font-weight: 600; }
+    #mode-toggle button.active-firebreak { background: #fab387; border-color: #fab387; color: #1e1e2e; font-weight: 600; }
+    #mode-toggle button.active-water     { background: #89dceb; border-color: #89dceb; color: #1e1e2e; font-weight: 600; }
+
+    /* ── Ignition list ───────────────────────────────────────────────────── */
+    #ign-list {
+      max-height: 70px; overflow-y: auto;
+      font-size: 10px; color: #6c7086; line-height: 1.6; margin-bottom: 4px;
+    }
+    #ign-list::-webkit-scrollbar { width: 4px; }
+    #ign-list::-webkit-scrollbar-thumb { background: #313244; border-radius: 2px; }
+
+    /* ── Speed slider ────────────────────────────────────────────────────── */
+    .speed-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+    .speed-row label { font-size: 11px; color: #a6adc8; white-space: nowrap; min-width: 48px; }
+    .speed-row input[type="range"] { flex: 1; accent-color: #89b4fa; cursor: pointer; }
+    .speed-row .speed-val { font-size: 11px; color: #cdd6f4; font-weight: 600; min-width: 26px; text-align: right; }
+
+    /* ── Action buttons ──────────────────────────────────────────────────── */
+    .btn {
+      display: block; width: 100%; padding: 7px;
+      border: none; border-radius: 6px;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+      margin-top: 6px; transition: opacity 0.15s, filter 0.15s;
+    }
+    .btn:active   { filter: brightness(0.85); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #btn-run    { background: #a6e3a1; color: #1e1e2e; }
+    #btn-pause  { background: #f9e2af; color: #1e1e2e; display: none; }
+    #btn-resume { background: #89b4fa; color: #1e1e2e; display: none; }
+    #btn-clear  { background: #313244; color: #cdd6f4; }
+    #btn-apply-fb { background: #fab387; color: #1e1e2e; display: none; margin-top: 4px; }
+
+    /* ── Status & stats ──────────────────────────────────────────────────── */
+    #status {
+      margin-top: 8px; font-size: 10.5px; color: #a6adc8;
+      min-height: 14px; word-break: break-word;
+    }
+    #status.err  { color: #f38ba8; }
+    #status.ok   { color: #a6e3a1; }
+    #status.info { color: #89b4fa; }
+    #stats { display: flex; gap: 8px; margin-top: 6px; font-size: 10.5px; color: #6c7086; }
+    #stats span { flex: 1; text-align: center; background: #1e1e2e; border-radius: 4px; padding: 2px 4px; }
+    #stats span b { color: #cdd6f4; }
+
+    /* ── Map cursor helpers ───────────────────────────────────────────────── */
+    .map-cursor-ignite    { cursor: crosshair; }
+    .map-cursor-firebreak { cursor: cell; }
+    .map-cursor-water     { cursor: copy; }
+
+    /* ── Risk panel ──────────────────────────────────────────────────────── */
+    #risk-panel {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      right: -220px; width: 200px;
+      background: rgba(17,17,27,0.93);
+      border: 1px solid rgba(137,180,250,0.18);
+      border-radius: 10px; padding: 12px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 32px rgba(0,0,0,0.55);
+      z-index: 100; transition: right 0.3s ease;
+      font-size: 11px; color: #a6adc8;
+      overflow-y: auto; max-height: calc(100vh - 100px);
+    }
+    #risk-panel.open { right: 60px; }
+    #risk-panel h3 {
+      font-size: 9px; text-transform: uppercase;
+      letter-spacing: 0.12em; color: #585b70; margin: 0 0 5px;
+    }
+    .risk-sect { margin-bottom: 10px; }
+    .risk-row  { display: flex; justify-content: space-between; margin: 3px 0; }
+    .risk-row b { color: #cdd6f4; }
+    #threat-badge {
+      display: inline-block; padding: 3px 10px; border-radius: 10px;
+      font-size: 11px; font-weight: 700;
+      background: #313244; color: #a6adc8;
+    }
+    #threat-badge.monitor  { background: #1e3a2f; color: #a6e3a1; }
+    #threat-badge.elevated { background: #3a3020; color: #f9e2af; }
+    #threat-badge.high     { background: #3a2520; color: #fab387; }
+    #threat-badge.critical { background: #3a1a1a; color: #f38ba8; }
+    .arc-center { display: flex; justify-content: center; padding: 4px 0; }
+
+    /* ── Floating action buttons ─────────────────────────────────────────── */
+    .fab {
+      position: absolute; right: 14px;
+      padding: 6px 10px;
+      background: rgba(17,17,27,0.88);
+      border: 1px solid rgba(137,180,250,0.18);
+      border-radius: 6px; font-size: 12px;
+      cursor: pointer; z-index: 105;
+      backdrop-filter: blur(8px); color: #a6adc8;
+      transition: color 0.2s, border-color 0.2s, background 0.2s;
+    }
+    .fab:hover { color: #cdd6f4; }
+    .fab.on    { color: #89dceb; border-color: #89dceb; background: rgba(137,220,235,0.1); }
+    /* Stack FABs vertically centered on right edge */
+    #risk-toggle { top: calc(50% - 54px); }
+    #btn-wind    { top: calc(50%); }
+    #btn-mute    { top: calc(50% + 36px); }
+
+    /* ── Timeline bar ────────────────────────────────────────────────────── */
+    #timeline-bar {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      display: none; flex-direction: column;
+      background: rgba(17,17,27,0.9);
+      border-top: 1px solid rgba(137,180,250,0.18);
+      backdrop-filter: blur(8px);
+      z-index: 110; padding: 4px 16px 6px;
+    }
+    #timeline-bar.visible { display: flex; }
+    #tl-stats { display: flex; gap: 12px; font-size: 11px; color: #a6adc8; margin-bottom: 3px; }
+    #tl-stats b { color: #cdd6f4; }
+    #scrubber  { width: 100%; accent-color: #89b4fa; cursor: pointer; height: 4px; margin: 0; }
+    #tl-days   { display: flex; gap: 5px; margin-top: 3px; flex-wrap: wrap; }
+    .day-tag {
+      font-size: 9.5px; color: #6c7086; cursor: pointer;
+      padding: 1px 5px; border-radius: 3px;
+      background: #1e1e2e; border: 1px solid transparent; user-select: none;
+    }
+    .day-tag:hover  { color: #cdd6f4; }
+    .day-tag.active { color: #a6e3a1; border-color: #a6e3a1; }
+
+    /* ── Map view tabs ───────────────────────────────────────────────────── */
+    #map-tabs {
+      position: absolute; top: 14px;
+      left: 50%; transform: translateX(-50%);
+      display: flex; gap: 3px;
+      background: rgba(17,17,27,0.88);
+      border: 1px solid rgba(137,180,250,0.18);
+      border-radius: 8px; padding: 3px;
+      z-index: 105; backdrop-filter: blur(8px);
+    }
+    .map-tab {
+      padding: 5px 12px; font-size: 11px; font-weight: 600;
+      border: none; border-radius: 6px; cursor: pointer;
+      background: transparent; color: #585b70;
+      transition: background 0.15s, color 0.15s;
+    }
+    .map-tab.active { background: #313244; color: #cdd6f4; }
+    .map-tab:hover:not(.active) { color: #a6adc8; }
+
+    /* ── Vegetation legend ───────────────────────────────────────────────── */
+    #veg-legend {
+      position: absolute; bottom: 50px; left: 50%;
+      transform: translateX(-50%);
+      display: none; flex-wrap: wrap; gap: 4px;
+      max-width: 600px; justify-content: center;
+      background: rgba(17,17,27,0.88);
+      border: 1px solid rgba(137,180,250,0.18);
+      border-radius: 8px; padding: 8px 10px;
+      z-index: 105; backdrop-filter: blur(8px);
+      font-size: 10px; color: #a6adc8;
+    }
+    #veg-legend.visible { display: flex; }
+    .leg-item { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+    .leg-swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+
+    /* ── Debug overlay ───────────────────────────────────────────────────── */
+    #dbg {
+      position: fixed; top: 8px; right: 8px; z-index: 9999;
+      background: rgba(0,0,0,0.82); color: #a6e3a1;
+      font: 11px/1.5 monospace; padding: 8px 12px; border-radius: 6px;
+      max-width: 400px; max-height: 220px; overflow-y: auto; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="map"></div>
+  <div id="atmo-overlay"></div>
+  <canvas id="glow-canvas"></canvas>
+  <canvas id="smoke-canvas"></canvas>
+  <canvas id="wind-canvas" style="display:none"></canvas>
+
+  <!-- Map view tabs -->
+  <div id="map-tabs">
+    <button class="map-tab active" id="tab-satellite" onclick="setMapTab('satellite')">🛰 Satellite</button>
+    <button class="map-tab"        id="tab-vegetation" onclick="setMapTab('vegetation')">🌿 Vegetation</button>
+  </div>
+
+  <!-- Vegetation legend (shown when vegetation tab is active) -->
+  <div id="veg-legend"></div>
+
+  <!-- Weather strip -->
+  <div id="weather-strip">
+    <span id="ws-time">T+00:00</span>
+    <span id="ws-wallclock"></span>
+    <span>💨 <b id="ws-wind">—</b> m/s</span>
+    <span id="ws-arrow">↑</span>
+    <span>🌡 <b id="ws-temp">—</b>°C</span>
+    <span>💧 <b id="ws-rh">—</b>%</span>
+  </div>
+
+  <!-- Risk panel -->
+  <div id="risk-panel">
+    <div class="risk-sect">
+      <h3>Threat Level</h3>
+      <span id="threat-badge">MONITOR</span>
+      <div class="risk-row" style="margin-top:6px"><span>Elapsed</span><b id="rp-elapsed">—</b></div>
+      <div class="risk-row"><span>Active</span><b id="rp-active">— ha</b></div>
+      <div class="risk-row"><span>Burned</span><b id="rp-burned">— ha</b></div>
+    </div>
+    <div class="risk-sect">
+      <h3>Rate of Spread m/min</h3>
+      <div class="arc-center">
+        <svg id="compass-svg" width="110" height="110" viewBox="0 0 110 110">
+          <circle cx="55" cy="55" r="48" fill="none" stroke="#313244" stroke-width="1"/>
+          <circle cx="55" cy="55" r="2.5" fill="#585b70"/>
+          <text x="55" y="11" text-anchor="middle" font-size="8" fill="#585b70">N</text>
+          <text x="101" y="58" text-anchor="middle" font-size="8" fill="#585b70">E</text>
+          <text x="55" y="106" text-anchor="middle" font-size="8" fill="#585b70">S</text>
+          <text x="9" y="58" text-anchor="middle" font-size="8" fill="#585b70">W</text>
+          <line id="ros-n" x1="55" y1="55" x2="55" y2="55" stroke="#89b4fa" stroke-width="3" stroke-linecap="round"/>
+          <line id="ros-e" x1="55" y1="55" x2="55" y2="55" stroke="#89b4fa" stroke-width="3" stroke-linecap="round"/>
+          <line id="ros-s" x1="55" y1="55" x2="55" y2="55" stroke="#89b4fa" stroke-width="3" stroke-linecap="round"/>
+          <line id="ros-w" x1="55" y1="55" x2="55" y2="55" stroke="#89b4fa" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:#6c7086">
+        <span>N:<b id="ros-n-val">0</b></span>
+        <span>E:<b id="ros-e-val">0</b></span>
+        <span>S:<b id="ros-s-val">0</b></span>
+        <span>W:<b id="ros-w-val">0</b></span>
+      </div>
+    </div>
+    <div class="risk-sect">
+      <h3>Burned Area</h3>
+      <div class="arc-center">
+        <svg width="80" height="80" viewBox="0 0 80 80">
+          <circle cx="40" cy="40" r="30" fill="none" stroke="#313244" stroke-width="8"/>
+          <circle id="arc-circle" cx="40" cy="40" r="30" fill="none"
+                  stroke="#f38ba8" stroke-width="8"
+                  stroke-dasharray="188.5" stroke-dashoffset="188.5"
+                  stroke-linecap="round" transform="rotate(-90 40 40)"
+                  style="transition:stroke-dashoffset 1s ease"/>
+          <text id="arc-text" x="40" y="45" text-anchor="middle" font-size="10" fill="#cdd6f4">0 ha</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating action buttons -->
+  <button class="fab" id="risk-toggle" onclick="toggleRiskPanel()">⚡ Risk</button>
+  <button class="fab" id="btn-wind"    onclick="toggleWind()">💨 Wind</button>
+  <button class="fab" id="btn-mute"    onclick="toggleMute()">🔊</button>
+
+  <!-- Timeline bar -->
+  <div id="timeline-bar">
+    <div id="tl-stats">
+      <span>⏱ <b id="tl-elapsed">T+00:00</b></span>
+      <span>🕐 <b id="tl-wallclock">—</b></span>
+      <span>🔥 Active <b id="tl-active">—</b> ha</span>
+      <span>🖤 Burned <b id="tl-burned">—</b> ha</span>
+    </div>
+    <input type="range" id="scrubber" min="0" max="0" value="0" oninput="onScrub(this.value)"/>
+    <div id="tl-days"></div>
+  </div>
+
+  <!-- Control panel -->
+  <div id="panel">
+    <h1><span class="flame">🔥</span> WILSON Sandbox</h1>
+
+    <div class="sect-label">Weather</div>
+    <div class="row">
+      <label>Wind speed</label>
+      <input type="number" id="wind-speed" value="5" min="0" max="50" step="0.5" />
+      <span class="unit">m/s</span>
+    </div>
+    <div class="row">
+      <label>Wind direction</label>
+      <input type="number" id="wind-dir" value="330" min="0" max="360" step="1" />
+      <span class="unit">°</span>
+    </div>
+    <div class="row">
+      <label>Temperature</label>
+      <input type="number" id="temperature" value="35" min="-10" max="55" step="1" />
+      <span class="unit">°C</span>
+    </div>
+    <div class="row">
+      <label>Humidity</label>
+      <input type="number" id="humidity" value="25" min="1" max="100" step="1" />
+      <span class="unit">%</span>
+    </div>
+    <div class="row">
+      <label>Bbox half-width</label>
+      <input type="number" id="bbox" value="0.125" min="0.05" max="2.0" step="0.05" />
+      <span class="unit">°</span>
+    </div>
+    <div class="row">
+      <label>Date (hourly wx)</label>
+      <input type="date" id="date-start" />
+      <span class="unit"></span>
+    </div>
+    <div class="row">
+      <label>Ignition time</label>
+      <input type="time" id="ignition-time" value="14:00" />
+      <span class="unit">UTC</span>
+    </div>
+
+    <div class="sect-label">Drawing Mode</div>
+    <div id="mode-toggle">
+      <button id="btn-ignite"    class="active-ignite" onclick="setMode('ignite')">🔥 Ignite</button>
+      <button id="btn-firebreak" onclick="setMode('firebreak')">🪓 Break</button>
+      <button id="btn-water"     onclick="setMode('water')">💧 Water</button>
+    </div>
+    <button class="btn" id="btn-apply-fb" onclick="applyFirebreak()">Apply Firebreak</button>
+
+    <div class="sect-label">Ignition Points (<span id="ign-count">0</span>)</div>
+    <div id="ign-list">None yet — click the map in Ignite mode.</div>
+
+    <button class="btn" id="btn-run"    onclick="runSimulation()">▶ Run Simulation</button>
+    <button class="btn" id="btn-pause"  onclick="pauseSim()">⏸ Pause</button>
+    <button class="btn" id="btn-resume" onclick="resumeSim()">▶ Resume</button>
+
+    <div class="speed-row">
+      <label>Speed</label>
+      <input type="range" id="speed-slider" min="1" max="10" step="1" value="1"
+             oninput="onSpeedChange(this.value)" />
+      <span class="speed-val" id="speed-val">1×</span>
+    </div>
+
+    <button class="btn" id="btn-clear" onclick="clearAll()">🗑 Clear All</button>
+
+    <div id="status" class="info">Click the map to place ignition points.</div>
+    <div id="stats">
+      <span>Step <b id="stat-step">—</b></span>
+      <span>Active <b id="stat-active">—</b> ha</span>
+      <span>Burned <b id="stat-burned">—</b> ha</span>
+    </div>
+  </div>
+
+  <!-- Debug overlay -->
+  <div id="dbg"></div>
+
+  <script>
+    // ── Debug ─────────────────────────────────────────────────────────────────
+    (function () {
+      var el = document.getElementById("dbg");
+      window._dbg = function (msg, color) {
+        var line = document.createElement("div");
+        line.style.color = color || "#a6e3a1";
+        line.textContent = "[" + new Date().toLocaleTimeString() + "] " + msg;
+        el.appendChild(line);
+        el.scrollTop = el.scrollHeight;
+        console.log(msg);
+      };
+      window.onerror = function (msg, src, line) {
+        window._dbg("JS ERROR: " + msg + " (" + src + ":" + line + ")", "#f38ba8");
+      };
+      window.addEventListener("unhandledrejection", function (e) {
+        window._dbg("PROMISE: " + e.reason, "#fab387");
+      });
+      _dbg("Page loaded — MapLibre " + maplibregl.version);
+    }());
+
+    // ── Constants ─────────────────────────────────────────────────────────────
+    var SRC_BURNING     = "fire-burning-src";
+    var SRC_BURNED      = "fire-burned-src";
+    var SRC_IGNITE      = "ignition-src";
+    var SRC_FIREBREAK   = "firebreak-src";
+    var SRC_WATER       = "water-src";
+    var SRC_VEGETATION  = "vegetation-src";
+    var TILE_URL        = "https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}.jpg?api_key=42d95708-abc1-48a0-882c-c13e72274056";
+    var WS_URL          = "ws://localhost:8765";
+    var _activeMapTab   = "satellite";
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    var ws                = null;
+    var simRunning        = false;
+    var mode              = "ignite";
+    var ignitionPoints    = [];
+    var firebreakPoints   = [];
+    var committedFirebreaks = [];
+    var waterDrops        = [];
+    var _fireOverlayReady = false;
+    var _fireBbox         = null;
+    var _dtMinutes        = 0.05;
+    var _initTime         = null;
+    var _ignitionWallHour = 14;
+    var _windUSmoke       = 0;
+    var _windVSmoke       = 0;
+    var _windRAF          = null;
+    var _smokeRAF         = null;
+    var _windVisible      = false;
+    var _muted            = false;
+    var _audioCtx         = null;
+    var _audioMasterGain  = null;
+    var _crackleGain      = null;
+    var _fireBedGain      = null;
+    var _windGain         = null;
+    var _crackleTimer     = null;
+    var _particles        = [];
+    var _windU20          = null;
+    var _windV20          = null;
+    var _windBbox         = null;
+    var _windRows         = 20;
+    var _windCols         = 20;
+    var _windParticles    = [];
+    window._simHistory    = null;
+
+    // ── Utility ───────────────────────────────────────────────────────────────
+    function emptyFC() {
+      return { type: "FeatureCollection", features: [] };
+    }
+
+    function _fmtMin(totalMin) {
+      if (totalMin == null) return "—";
+      var h = Math.floor(totalMin / 60).toString().padStart(2, "0");
+      var m = Math.floor(totalMin % 60).toString().padStart(2, "0");
+      return h + ":" + m;
+    }
+
+    // wall_clock_minutes from server = ignition_wall_hour*60 + sim_minutes (absolute UTC)
+    function _fmtWallClock(wallClockMinutes) {
+      if (wallClockMinutes == null) return "—";
+      var total = Math.round(wallClockMinutes) % (24 * 60);
+      return _fmtMin(total);
+    }
+
+    function setStatus(msg, cls) {
+      var el = document.getElementById("status");
+      el.textContent = msg;
+      el.className   = cls || "info";
+    }
+
+    function _prepareOverlayCtx(canvasId) {
+      var canvas = document.getElementById(canvasId);
+      var mapEl = map.getContainer();
+      var cssW = mapEl.clientWidth;
+      var cssH = mapEl.clientHeight;
+      var dpr = Math.max(1, window.devicePixelRatio || 1);
+      var pxW = Math.round(cssW * dpr);
+      var pxH = Math.round(cssH * dpr);
+      if (canvas.width !== pxW || canvas.height !== pxH) {
+        canvas.width = pxW;
+        canvas.height = pxH;
+        canvas.style.width = cssW + "px";
+        canvas.style.height = cssH + "px";
+      }
+      var ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+      return { ctx: ctx, width: cssW, height: cssH };
+    }
+
+    // ── MapLibre ──────────────────────────────────────────────────────────────
+    var map = new maplibregl.Map({
+      container: "map",
+      style: {
+        version: 8,
+        sources: {
+          satellite: {
+            type: "raster",
+            tiles: [TILE_URL],
+            tileSize: 256,
+            maxzoom: 20,
+            attribution: "© Stadia Maps, © CNES/Airbus",
+          },
+        },
+        layers: [{ id: "satellite", type: "raster", source: "satellite" }],
+      },
+      center: [23.0, 38.5],
+      zoom: 7,
+      attributionControl: false,
+    });
+
+    map.addControl(new maplibregl.NavigationControl(), "bottom-right");
+    map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+
+    map.on("error", function (e) {
+      _dbg("MAP ERROR: " + ((e.error && e.error.message) || JSON.stringify(e)), "#f38ba8");
+    });
+
+    map.on("load", function () {
+      _dbg("Map loaded.", "#89dceb");
+      _setupMapLayers();
+      if (!_smokeRAF) _animateSmoke();
+    });
+    map.on("movestart", function () {
+      // Screen-space particles lose alignment while panning/zooming.
+      _particles.length = 0;
+    });
+
+    // ── Map layer setup ───────────────────────────────────────────────────────
+    function _setupMapLayers() {
+      map.addSource(SRC_IGNITE,    { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_FIREBREAK, { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_WATER,      { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_VEGETATION, { type: "geojson", data: emptyFC() });
+
+      // Vegetation layer — hidden until tab is switched
+      map.addLayer({
+        id: "vegetation-layer", type: "fill", source: SRC_VEGETATION,
+        layout: { visibility: "none" },
+        paint: {
+          "fill-color":   ["get", "color"],
+          "fill-opacity": 0.88,
+        },
+      });
+      map.addLayer({
+        id: "vegetation-outline", type: "line", source: SRC_VEGETATION,
+        layout: { visibility: "none" },
+        paint: { "line-color": "#000000", "line-width": 0.05, "line-opacity": 0.04 },
+      });
+
+      map.addLayer({
+        id: "ignition-layer", type: "circle", source: SRC_IGNITE,
+        paint: {
+          "circle-radius": 7, "circle-color": "#f38ba8",
+          "circle-stroke-width": 2, "circle-stroke-color": "#1e1e2e",
+        },
+      });
+      map.addLayer({
+        id: "firebreak-layer", type: "line", source: SRC_FIREBREAK,
+        paint: { "line-color": "#fab387", "line-width": 3, "line-opacity": 0.9 },
+      });
+      map.addLayer({
+        id: "water-layer", type: "fill", source: SRC_WATER,
+        paint: { "fill-color": "#89dceb", "fill-opacity": 0.45 },
+      });
+      map.addLayer({
+        id: "water-outline", type: "line", source: SRC_WATER,
+        paint: { "line-color": "#89dceb", "line-width": 1.5 },
+      });
+
+      map.on("click", onMapClick);
+      setStatus("Ready. Drop ignition points then click Run Simulation.");
+      _dbg("Map layers set up.", "#a6e3a1");
+    }
+
+    // ── Map tab switching ─────────────────────────────────────────────────────
+    function setMapTab(tab) {
+      _activeMapTab = tab;
+      document.getElementById("tab-satellite").classList.toggle("active", tab === "satellite");
+      document.getElementById("tab-vegetation").classList.toggle("active", tab === "vegetation");
+
+      var satVis = tab === "satellite" ? "visible" : "none";
+      var vegVis = tab === "vegetation" ? "visible" : "none";
+
+      if (map.getLayer("satellite"))          map.setLayoutProperty("satellite",          "visibility", satVis);
+      if (map.getLayer("vegetation-layer"))   map.setLayoutProperty("vegetation-layer",   "visibility", vegVis);
+      if (map.getLayer("vegetation-outline")) map.setLayoutProperty("vegetation-outline", "visibility", vegVis);
+
+      // Fire layers stay visible regardless of tab
+      var legend = document.getElementById("veg-legend");
+      if (tab === "vegetation") legend.classList.add("visible");
+      else legend.classList.remove("visible");
+    }
+
+    // ── Vegetation map init (called with init_ack.geojson_fuel_map) ───────────
+    function _initVegMap(geojsonFuelMap) {
+      if (!geojsonFuelMap || !geojsonFuelMap.features) return;
+      if (map.getSource(SRC_VEGETATION)) {
+        map.getSource(SRC_VEGETATION).setData(geojsonFuelMap);
+      }
+
+      // Build legend from unique fuel names in the data
+      var seen = {};
+      geojsonFuelMap.features.forEach(function(f) {
+        var fuel = f.properties && f.properties.fuel;
+        var color = f.properties && f.properties.color;
+        if (fuel && color && !seen[fuel]) {
+          seen[fuel] = color;
+        }
+      });
+
+      var legend = document.getElementById("veg-legend");
+      legend.innerHTML = "";
+      Object.keys(seen).sort().forEach(function(name) {
+        var item = document.createElement("div");
+        item.className = "leg-item";
+        item.innerHTML = '<div class="leg-swatch" style="background:' + seen[name] + '"></div>'
+                       + '<span>' + name.replace(/_/g, " ") + '</span>';
+        legend.appendChild(item);
+      });
+
+      _dbg("Vegetation map loaded (" + geojsonFuelMap.features.length + " features)", "#a6e3a1");
+    }
+
+    // ── Fire GeoJSON overlay ──────────────────────────────────────────────────
+    function _initFireOverlay(rows, cols, lat_min, lat_max, lon_min, lon_max) {
+      _fireBbox = { lat_min: lat_min, lat_max: lat_max, lon_min: lon_min, lon_max: lon_max };
+
+      if (map.getLayer("fire-burning-layer")) map.removeLayer("fire-burning-layer");
+      if (map.getLayer("fire-burned-layer"))  map.removeLayer("fire-burned-layer");
+      if (map.getSource(SRC_BURNING))          map.removeSource(SRC_BURNING);
+      if (map.getSource(SRC_BURNED))           map.removeSource(SRC_BURNED);
+
+      // Charred ground beneath active fire (never cleared, only updated)
+      map.addSource(SRC_BURNED, { type: "geojson", data: emptyFC() });
+      map.addLayer({
+        id: "fire-burned-layer", type: "fill", source: SRC_BURNED,
+        paint: { "fill-color": "#281405", "fill-opacity": 0.82 },
+      });
+
+      map.addSource(SRC_BURNING, { type: "geojson", data: emptyFC() });
+      map.addLayer({
+        id: "fire-burning-layer", type: "fill", source: SRC_BURNING,
+        paint: { "fill-color": "#ff5000", "fill-opacity": 0.75 },
+      });
+
+      _fireOverlayReady = true;
+      _dbg("Fire GeoJSON overlay ready (" + cols + "x" + rows + ")", "#a6e3a1");
+    }
+
+    function renderFireFrame(msg) {
+      if (!_fireOverlayReady) return;
+      if (msg.geojson_burning) map.getSource(SRC_BURNING).setData(msg.geojson_burning);
+      if (msg.geojson_burned)  map.getSource(SRC_BURNED).setData(msg.geojson_burned);
+      map.triggerRepaint();
+    }
+
+    // Extract centroid screen coords from GeoJSON FeatureCollection for glow/smoke.
+    function _geoJsonCentroids(gjson, maxPoints) {
+      if (!gjson || !gjson.features || !gjson.features.length) return [];
+      var pts = [];
+      for (var fi = 0; fi < gjson.features.length; fi++) {
+        var feat = gjson.features[fi];
+        var geom = feat.geometry;
+        if (!geom) continue;
+        var polys = geom.type === "MultiPolygon" ? geom.coordinates
+                  : geom.type === "Polygon"       ? [geom.coordinates]
+                  : [];
+        for (var pi = 0; pi < polys.length; pi++) {
+          var poly = polys[pi];
+          if (!poly || !poly[0] || !poly[0].length) continue;
+          var ring   = poly[0];
+          var sumLon = 0, sumLat = 0;
+          for (var ri = 0; ri < ring.length; ri++) {
+            sumLon += ring[ri][0];
+            sumLat += ring[ri][1];
+          }
+          var cLon = sumLon / ring.length;
+          var cLat = sumLat / ring.length;
+          pts.push(map.project([cLon, cLat]));
+          if (pts.length >= maxPoints) return pts;
+        }
+      }
+      return pts;
+    }
+
+    function _geoJsonFrontPoints(gjson, maxPoints) {
+      if (!gjson || !gjson.features || !gjson.features.length) return [];
+      var pts = [];
+      for (var fi = 0; fi < gjson.features.length; fi++) {
+        var feat = gjson.features[fi];
+        var geom = feat.geometry;
+        if (!geom) continue;
+        var polys = geom.type === "MultiPolygon" ? geom.coordinates
+                  : geom.type === "Polygon"       ? [geom.coordinates]
+                  : [];
+        for (var pi = 0; pi < polys.length; pi++) {
+          var ring = polys[pi] && polys[pi][0];
+          if (!ring || ring.length < 4) continue;
+          var stride = Math.max(1, Math.floor(ring.length / 18));
+          for (var ri = 0; ri < ring.length; ri += stride) {
+            pts.push(map.project(ring[ri]));
+            if (pts.length >= maxPoints) return pts;
+          }
+        }
+      }
+      return pts;
+    }
+
+    // ── Atmospheric time-of-day overlay ──────────────────────────────────────
+    function _applyAtmoOverlay(minutesSinceIgnition) {
+      var wallHour;
+      if (_initTime) {
+        var wallMs = _initTime.getTime() + minutesSinceIgnition * 60000;
+        var d = new Date(wallMs);
+        wallHour = d.getUTCHours() + d.getUTCMinutes() / 60;
+      } else {
+        wallHour = (_ignitionWallHour + minutesSinceIgnition / 60) % 24;
+      }
+      var distFromNoon = Math.abs(wallHour - 12);
+      var darkness = Math.max(0, Math.min(1, (distFromNoon - 1) / 10));
+      var a = (darkness * 0.55).toFixed(3);
+      var r = Math.round(10 * darkness);
+      var g = Math.round(10 * darkness);
+      var b = Math.round(40 * darkness);
+      document.getElementById("atmo-overlay").style.backgroundColor =
+        "rgba(" + r + "," + g + "," + b + "," + a + ")";
+    }
+
+    // ── Fire glow canvas ──────────────────────────────────────────────────────
+    function _renderGlow(gjsonBurning) {
+      var prep = _prepareOverlayCtx("glow-canvas");
+      var ctx = prep.ctx;
+      if (!gjsonBurning || !gjsonBurning.features || !gjsonBurning.features.length) return;
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.shadowBlur = 14;
+      ctx.shadowColor = "rgba(255,140,30,0.35)";
+      ctx.fillStyle = "rgba(255,95,10,0.22)";
+
+      for (var fi = 0; fi < gjsonBurning.features.length; fi++) {
+        var geom = gjsonBurning.features[fi].geometry;
+        if (!geom) continue;
+        var polys = geom.type === "MultiPolygon" ? geom.coordinates
+                  : geom.type === "Polygon"       ? [geom.coordinates]
+                  : [];
+        for (var pi = 0; pi < polys.length; pi++) {
+          var ring = polys[pi] && polys[pi][0];
+          if (!ring || ring.length < 4) continue;
+          ctx.beginPath();
+          for (var ri = 0; ri < ring.length; ri++) {
+            var p = map.project(ring[ri]);
+            if (ri === 0) ctx.moveTo(p.x, p.y);
+            else ctx.lineTo(p.x, p.y);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
+    // ── Smoke particle system ─────────────────────────────────────────────────
+    function _spawnSmoke(gjsonBurning) {
+      if (!_fireBbox) return;
+      var pts = _geoJsonFrontPoints(gjsonBurning, 140);
+      if (!pts.length) pts = _geoJsonCentroids(gjsonBurning, 80);
+      var N = Math.min(90, pts.length);
+      for (var k = 0; k < N; k++) {
+        var px = pts[Math.floor(Math.random() * pts.length)];
+        _particles.push({
+          x: px.x, y: px.y,
+          vx: _windUSmoke * 0.55 + (Math.random() - 0.5) * 1.2,
+          vy: -_windVSmoke * 0.55 - 0.9 + (Math.random() - 0.5) * 0.8,
+          life: 0, maxLife: 110 + Math.random() * 40,
+        });
+        if (_particles.length > 1600) _particles.splice(0, _particles.length - 1600);
+      }
+    }
+
+    function _animateSmoke() {
+      var prep = _prepareOverlayCtx("smoke-canvas");
+      var ctx = prep.ctx;
+      for (var i = _particles.length - 1; i >= 0; i--) {
+        var p = _particles[i];
+        p.x += p.vx; p.y += p.vy; p.life++;
+        if (p.life >= p.maxLife) { _particles.splice(i, 1); continue; }
+        var t      = p.life / p.maxLife;
+        var r2     = Math.round(90 + t * 85);
+        var g2     = Math.round(80 + t * 90);
+        var b2     = Math.round(70 + t * 100);
+        var a2     = (0.30 * (1 - t)).toFixed(3);
+        var radius = 3 + t * 18;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(" + r2 + "," + g2 + "," + b2 + "," + a2 + ")";
+        ctx.fill();
+      }
+      _smokeRAF = requestAnimationFrame(_animateSmoke);
+    }
+
+    // ── Animated wind streamlines ─────────────────────────────────────────────
+    function _spawnWindParticle() {
+      var wR = _windRows || 20;
+      var wC = _windCols || 20;
+      var ri  = Math.floor(Math.random() * wR);
+      var ci  = Math.floor(Math.random() * wC);
+      var lat = _windBbox.lat_min + (ri / (wR - 1)) * (_windBbox.lat_max - _windBbox.lat_min);
+      var lon = _windBbox.lon_min + (ci / (wC - 1)) * (_windBbox.lon_max - _windBbox.lon_min);
+      return {
+        lat: lat, lon: lon,
+        u: _windU20[ri * wC + ci],
+        v: _windV20[ri * wC + ci],
+        life: Math.random() * 70,
+        maxLife: 70 + Math.random() * 90,
+      };
+    }
+
+    function _initWindStreamlines(b64U, b64V, wRows, wCols, lat_min, lat_max, lon_min, lon_max) {
+      var bufU = Uint8Array.from(atob(b64U), function (c) { return c.charCodeAt(0); }).buffer;
+      var bufV = Uint8Array.from(atob(b64V), function (c) { return c.charCodeAt(0); }).buffer;
+      _windU20  = new Float32Array(bufU);
+      _windV20  = new Float32Array(bufV);
+      _windBbox = { lat_min: lat_min, lat_max: lat_max, lon_min: lon_min, lon_max: lon_max };
+      _windRows = wRows || 20;
+      _windCols = wCols || 20;
+      _windParticles.length = 0;
+      for (var i = 0; i < 280; i++) _windParticles.push(_spawnWindParticle());
+      _dbg("Wind streamlines init (" + _windRows + "x" + _windCols + ")", "#89dceb");
+    }
+
+    function _animateWind() {
+      var prep = _prepareOverlayCtx("wind-canvas");
+      var ctx = prep.ctx;
+      var w = prep.width, h = prep.height;
+      if (_windU20 && _windBbox) {
+        var latScale = 111_320;
+        var lonScale = 111_320 * Math.max(0.2, Math.cos(((_windBbox.lat_min + _windBbox.lat_max) * 0.5) * Math.PI / 180));
+        var advectSec = 0.7;
+        for (var i = 0; i < _windParticles.length; i++) {
+          var p = _windParticles[i];
+          var sc = map.project([p.lon, p.lat]);
+          var t = p.life / p.maxLife;
+          var alpha = Math.min(1, t * 3) * (1 - t) * 0.75;
+          var tipX = sc.x + p.u * 3.2;
+          var tipY = sc.y - p.v * 3.2;
+          ctx.globalAlpha  = alpha;
+          ctx.strokeStyle  = "#89dceb";
+          ctx.lineWidth    = 1.2;
+          ctx.beginPath();
+          ctx.moveTo(sc.x, sc.y);
+          ctx.lineTo(tipX, tipY);
+          ctx.stroke();
+          p.lat += (p.v * advectSec) / latScale;
+          p.lon += (p.u * advectSec) / lonScale;
+          p.life++;
+          if (p.life >= p.maxLife ||
+              p.lat < _windBbox.lat_min || p.lat > _windBbox.lat_max ||
+              p.lon < _windBbox.lon_min || p.lon > _windBbox.lon_max ||
+              sc.x < -30 || sc.y < -30 || sc.x > (w + 30) || sc.y > (h + 30)) {
+            _windParticles[i] = _spawnWindParticle();
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+      _windRAF = requestAnimationFrame(_animateWind);
+    }
+
+    function toggleWind() {
+      _windVisible = !_windVisible;
+      var canvas = document.getElementById("wind-canvas");
+      var btn    = document.getElementById("btn-wind");
+      if (_windVisible) {
+        canvas.style.display = "block";
+        btn.classList.add("on");
+        if (!_windRAF) _animateWind();
+      } else {
+        canvas.style.display = "none";
+        btn.classList.remove("on");
+        if (_windRAF) { cancelAnimationFrame(_windRAF); _windRAF = null; }
+        var ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+
+    // ── Hourly weather strip ──────────────────────────────────────────────────
+    function _showWeatherStrip(data) {
+      document.getElementById("weather-strip").classList.add("visible");
+      if (data.wind_speed_ms != null) {
+        document.getElementById("ws-wind").textContent = (+data.wind_speed_ms).toFixed(1);
+        var dirRad = ((+data.wind_direction) || 0) * Math.PI / 180;
+        _windUSmoke = (+data.wind_speed_ms) * Math.sin(dirRad);
+        _windVSmoke = (+data.wind_speed_ms) * Math.cos(dirRad);
+      }
+      if (data.wind_direction != null) {
+        document.getElementById("ws-arrow").style.transform =
+          "rotate(" + (+data.wind_direction) + "deg)";
+      }
+      if (data.temperature_c     != null) document.getElementById("ws-temp").textContent = (+data.temperature_c).toFixed(1);
+      if (data.relative_humidity != null) document.getElementById("ws-rh").textContent   = (+data.relative_humidity).toFixed(0);
+      if (data.simMinutes        != null) document.getElementById("ws-time").textContent      = "T+" + _fmtMin(data.simMinutes);
+      if (data.wall_clock_minutes != null) document.getElementById("ws-wallclock").textContent = _fmtWallClock(data.wall_clock_minutes) + " UTC";
+    }
+
+    // ── Stats + timeline bar ──────────────────────────────────────────────────
+    function updateStats(step, active, burned, minutesSinceIgnition, wallClockMinutes) {
+      document.getElementById("stat-step").textContent   = step   != null ? step              : "—";
+      document.getElementById("stat-active").textContent = active != null ? active.toFixed(1)  : "—";
+      document.getElementById("stat-burned").textContent = burned != null ? burned.toFixed(1)  : "—";
+
+      var bar = document.getElementById("timeline-bar");
+      if (step != null) {
+        bar.classList.add("visible");
+        document.getElementById("tl-active").textContent    = active  != null ? active.toFixed(1)                   : "—";
+        document.getElementById("tl-burned").textContent    = burned  != null ? burned.toFixed(1)                   : "—";
+        document.getElementById("tl-elapsed").textContent   = minutesSinceIgnition != null ? "T+" + _fmtMin(minutesSinceIgnition) : "T+00:00";
+        document.getElementById("tl-wallclock").textContent = wallClockMinutes     != null ? _fmtWallClock(wallClockMinutes) + " UTC" : "—";
+      } else {
+        bar.classList.remove("visible");
+      }
+    }
+
+    // ── Timeline scrubber ─────────────────────────────────────────────────────
+    function onScrub(val) {
+      if (simRunning) return;
+      var idx = parseInt(val, 10);
+      if (window._simHistory && window._simHistory.length > 0) {
+        var frame = window._simHistory[Math.min(idx, window._simHistory.length - 1)];
+        if (frame) _updateScrubFrame(frame);
+        return;
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "scrub", index: idx }));
+      }
+    }
+
+    function _setupScrubber(msg) {
+      var count = msg.count || 0;
+      var sc    = document.getElementById("scrubber");
+      sc.max    = Math.max(0, count - 1);
+      sc.value  = sc.max;
+      document.getElementById("timeline-bar").classList.add("visible");
+      if (msg.frames && msg.frames.length > 0) {
+        window._simHistory = msg.frames;
+        _updateScrubFrame(msg.frames[msg.frames.length - 1]);
+      }
+    }
+
+    function _updateScrubFrame(frame) {
+      renderFireFrame(frame);
+      var step    = frame.step || 0;
+      var elapsed = frame.minutes_since_ignition != null
+                  ? frame.minutes_since_ignition
+                  : step * _dtMinutes;
+      var wall    = frame.wall_clock_minutes;
+
+      document.getElementById("tl-elapsed").textContent   = "T+" + _fmtMin(elapsed);
+      document.getElementById("tl-wallclock").textContent = wall != null ? _fmtWallClock(wall) + " UTC" : "—";
+      document.getElementById("tl-active").textContent    = frame.active_ha != null ? frame.active_ha.toFixed(1) : "—";
+      document.getElementById("tl-burned").textContent    = frame.burned_ha != null ? frame.burned_ha.toFixed(1) : "—";
+
+      _updateRiskPanel(step, frame.active_ha, frame.burned_ha, elapsed,
+                       { N: 0, E: 0, S: 0, W: 0 });
+      _renderGlow(frame.geojson_burning);
+    }
+
+    // ── Risk dashboard panel ──────────────────────────────────────────────────
+    function _updateRiskPanel(step, active, burned, minutesSinceIgnition, ros) {
+      document.getElementById("rp-elapsed").textContent = minutesSinceIgnition != null ? "T+" + _fmtMin(minutesSinceIgnition) : "—";
+      document.getElementById("rp-active").textContent  = active != null ? active.toFixed(1) + " ha" : "— ha";
+      document.getElementById("rp-burned").textContent  = burned != null ? burned.toFixed(1) + " ha" : "— ha";
+
+      var badge      = document.getElementById("threat-badge");
+      var totalActive = active || 0;
+      var level = "monitor";
+      if      (totalActive > 200) level = "critical";
+      else if (totalActive >  80) level = "high";
+      else if (totalActive >  30) level = "elevated";
+      badge.className   = level;
+      badge.textContent = level.toUpperCase();
+
+      // Compass ROS arms
+      var maxRos = ros ? Math.max(ros.N || 0, ros.E || 0, ros.S || 0, ros.W || 0) : 0;
+      var scale  = maxRos > 0 ? 40 / maxRos : 0;
+      var cx = 55, cy = 55;
+      function setArm(id, dx, dy) {
+        var el = document.getElementById(id);
+        if (el) { el.setAttribute("x2", cx + dx); el.setAttribute("y2", cy + dy); }
+      }
+      if (ros) {
+        setArm("ros-n",  0,                    -(ros.N || 0) * scale);
+        setArm("ros-e",  (ros.E || 0) * scale,  0);
+        setArm("ros-s",  0,                     (ros.S || 0) * scale);
+        setArm("ros-w", -(ros.W || 0) * scale,  0);
+        document.getElementById("ros-n-val").textContent = (ros.N || 0).toFixed(1);
+        document.getElementById("ros-e-val").textContent = (ros.E || 0).toFixed(1);
+        document.getElementById("ros-s-val").textContent = (ros.S || 0).toFixed(1);
+        document.getElementById("ros-w-val").textContent = (ros.W || 0).toFixed(1);
+      }
+
+      // Arc chart (burned area)
+      var arc     = document.getElementById("arc-circle");
+      var arcText = document.getElementById("arc-text");
+      if (arc && burned != null) {
+        var frac = Math.min(1, burned / 1000);
+        arc.style.strokeDashoffset = (188.5 * (1 - frac)).toFixed(1);
+        arcText.textContent        = burned.toFixed(0) + " ha";
+      }
+    }
+
+    function toggleRiskPanel() {
+      document.getElementById("risk-panel").classList.toggle("open");
+      document.getElementById("risk-toggle").classList.toggle("on");
+    }
+
+    // ── Web Audio fire soundscape ─────────────────────────────────────────────
+    function _scheduleCrackle() {
+      if (!_audioCtx || !_crackleGain) return;
+      var now = _audioCtx.currentTime;
+      var burst = 0.01 + Math.random() * 0.06;
+      _crackleGain.gain.cancelScheduledValues(now);
+      _crackleGain.gain.setTargetAtTime(burst, now, 0.01);
+      _crackleGain.gain.setTargetAtTime(0.003, now + 0.05, 0.03);
+      _crackleTimer = setTimeout(_scheduleCrackle, 70 + Math.random() * 230);
+    }
+
+    function _initAudio() {
+      if (_audioCtx) {
+        if (!_crackleTimer) _scheduleCrackle();
+        return;
+      }
+      try {
+        _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        _audioMasterGain = _audioCtx.createGain();
+        _audioMasterGain.gain.value = 0.7;
+        _audioMasterGain.connect(_audioCtx.destination);
+
+        var bufLen = _audioCtx.sampleRate * 2;
+        var buffer = _audioCtx.createBuffer(1, bufLen, _audioCtx.sampleRate);
+        var data   = buffer.getChannelData(0);
+        for (var i = 0; i < bufLen; i++) data[i] = (Math.random() * 2 - 1);
+
+        var bedSrc = _audioCtx.createBufferSource();
+        bedSrc.buffer = buffer;
+        bedSrc.loop = true;
+        var bedLP = _audioCtx.createBiquadFilter();
+        bedLP.type = "lowpass";
+        bedLP.frequency.value = 1200;
+        _fireBedGain = _audioCtx.createGain();
+        _fireBedGain.gain.value = 0.0;
+        bedSrc.connect(bedLP);
+        bedLP.connect(_fireBedGain);
+        _fireBedGain.connect(_audioMasterGain);
+        bedSrc.start();
+
+        var crackleSrc = _audioCtx.createBufferSource();
+        crackleSrc.buffer = buffer;
+        crackleSrc.loop = true;
+        var crackleBP = _audioCtx.createBiquadFilter();
+        crackleBP.type = "bandpass";
+        crackleBP.frequency.value = 2100;
+        crackleBP.Q.value = 1.5;
+        _crackleGain = _audioCtx.createGain();
+        _crackleGain.gain.value = 0.0;
+        crackleSrc.connect(crackleBP);
+        crackleBP.connect(_crackleGain);
+        _crackleGain.connect(_audioMasterGain);
+        crackleSrc.start();
+
+        var windSrc = _audioCtx.createBufferSource();
+        windSrc.buffer = buffer;
+        windSrc.loop = true;
+        var windLP = _audioCtx.createBiquadFilter();
+        windLP.type = "lowpass";
+        windLP.frequency.value = 500;
+        _windGain = _audioCtx.createGain();
+        _windGain.gain.value = 0.0;
+        windSrc.connect(windLP);
+        windLP.connect(_windGain);
+        _windGain.connect(_audioMasterGain);
+        windSrc.start();
+
+        _scheduleCrackle();
+
+        _dbg("Audio context created.", "#a6adc8");
+      } catch (e) {
+        _dbg("Audio init failed: " + e, "#fab387");
+      }
+    }
+
+    function _updateAudio(activeHa) {
+      if (!_audioCtx || _muted) return;
+      var fireLevel = activeHa > 0 ? Math.min(1, activeHa / 320) : 0;
+      var windLevel = Math.min(1, Math.hypot(_windUSmoke || 0, _windVSmoke || 0) / 12);
+      if (_fireBedGain) _fireBedGain.gain.setTargetAtTime(0.01 + fireLevel * 0.08, _audioCtx.currentTime, 0.4);
+      if (_windGain) _windGain.gain.setTargetAtTime(0.005 + windLevel * 0.04, _audioCtx.currentTime, 0.8);
+    }
+
+    function toggleMute() {
+      _muted = !_muted;
+      document.getElementById("btn-mute").textContent = _muted ? "🔇" : "🔊";
+      if (_muted && _audioCtx) {
+        _audioCtx.suspend();
+      } else if (!_muted && _audioCtx && _audioCtx.state === "suspended") {
+        _audioCtx.resume();
+        if (!_crackleTimer) _scheduleCrackle();
+      }
+    }
+
+    // ── Drawing modes ─────────────────────────────────────────────────────────
+    function setMode(m) {
+      mode = m;
+      ["btn-ignite", "btn-firebreak", "btn-water"].forEach(function (id) {
+        document.getElementById(id).className = "";
+      });
+      if (m === "ignite")    document.getElementById("btn-ignite").className    = "active-ignite";
+      if (m === "firebreak") document.getElementById("btn-firebreak").className = "active-firebreak";
+      if (m === "water")     document.getElementById("btn-water").className     = "active-water";
+
+      var canvas = map.getCanvas();
+      canvas.classList.remove("map-cursor-ignite", "map-cursor-firebreak", "map-cursor-water");
+      if (m === "ignite")    canvas.classList.add("map-cursor-ignite");
+      if (m === "firebreak") canvas.classList.add("map-cursor-firebreak");
+      if (m === "water")     canvas.classList.add("map-cursor-water");
+
+      document.getElementById("btn-apply-fb").style.display = (m === "firebreak") ? "block" : "none";
+      if (m !== "firebreak" && firebreakPoints.length > 1) commitFirebreak();
+    }
+
+    function onMapClick(e) {
+      var lat = e.lngLat.lat, lng = e.lngLat.lng;
+      if (mode === "ignite") {
+        ignitionPoints.push({ lat: lat, lng: lng });
+        refreshIgnList();
+        redrawIgnition();
+        setStatus("Ignition point added (" + ignitionPoints.length + " total).", "ok");
+      } else if (mode === "firebreak") {
+        firebreakPoints.push([lng, lat]);
+        if (firebreakPoints.length > 1) redrawFirebreak(true);
+        setStatus("Firebreak waypoint " + firebreakPoints.length + " added.", "info");
+      } else if (mode === "water") {
+        var dropRadiusM = 435;
+        addWaterDrop(lat, lng, dropRadiusM);
+        setStatus("Water drop at " + lat.toFixed(4) + ", " + lng.toFixed(4) + ".", "ok");
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "intervention", intervention_type: "water_drop",
+                                   lat: lat, lon: lng, radius_m: dropRadiusM }));
+        }
+      }
+    }
+
+    function refreshIgnList() {
+      var el = document.getElementById("ign-list");
+      document.getElementById("ign-count").textContent = ignitionPoints.length;
+      if (!ignitionPoints.length) {
+        el.textContent = "None yet — click the map in Ignite mode.";
+        return;
+      }
+      el.innerHTML = ignitionPoints.map(function (p, i) {
+        return "<div>" + (i + 1) + ". " + p.lat.toFixed(4) + ", " + p.lng.toFixed(4) + "</div>";
+      }).join("");
+    }
+
+    function redrawIgnition() {
+      var fc = {
+        type: "FeatureCollection",
+        features: ignitionPoints.map(function (p) {
+          return { type: "Feature", geometry: { type: "Point", coordinates: [p.lng, p.lat] }, properties: {} };
+        }),
+      };
+      if (map.getSource(SRC_IGNITE)) map.getSource(SRC_IGNITE).setData(fc);
+    }
+
+    function redrawFirebreak(includePreview) {
+      var lines = committedFirebreaks.map(function (coords) {
+        return { type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: {} };
+      });
+      if (includePreview && firebreakPoints.length > 1) {
+        lines.push({ type: "Feature",
+                     geometry: { type: "LineString", coordinates: firebreakPoints.slice() },
+                     properties: {} });
+      }
+      if (map.getSource(SRC_FIREBREAK)) {
+        map.getSource(SRC_FIREBREAK).setData({ type: "FeatureCollection", features: lines });
+      }
+    }
+
+    function applyFirebreak() {
+      if (firebreakPoints.length < 2) {
+        setStatus("Draw at least 2 points for a firebreak first.", "err");
+        return;
+      }
+      commitFirebreak();
+      setStatus("Firebreak applied.", "ok");
+    }
+
+    function commitFirebreak() {
+      if (firebreakPoints.length > 1) {
+        committedFirebreaks.push(firebreakPoints.slice());
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: "intervention", intervention_type: "firebreak",
+            points: firebreakPoints.map(function (c) { return { lat: c[1], lon: c[0] }; }),
+          }));
+        }
+      }
+      firebreakPoints = [];
+      redrawFirebreak(false);
+    }
+
+    function addWaterDrop(lat, lng, radiusM) {
+      var N = 36;
+      var latRad = lat * Math.PI / 180;
+      var dLat = (radiusM || 500) / 111320;
+      var dLon = dLat / Math.max(0.2, Math.cos(latRad));
+      var ring = [];
+      for (var i = 0; i <= N; i++) {
+        var a = (i / N) * 2 * Math.PI;
+        ring.push([lng + dLon * Math.cos(a), lat + dLat * Math.sin(a)]);
+      }
+      waterDrops.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: {} });
+      if (map.getSource(SRC_WATER)) {
+        map.getSource(SRC_WATER).setData({ type: "FeatureCollection", features: waterDrops });
+      }
+    }
+
+    // ── Speed control ─────────────────────────────────────────────────────────
+    function onSpeedChange(val) {
+      var n = parseInt(val, 10);
+      document.getElementById("speed-val").textContent = n + "×";
+      var steps = Math.round(1 + (n - 1) * (50 - 1) / 9);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "set_speed", steps_per_send: steps }));
+      }
+    }
+
+    // ── WebSocket message handler ─────────────────────────────────────────────
+    function _handleMsg(msg) {
+      if (msg.type === "init_ack") {
+        _dtMinutes = msg.dt_minutes || 0.05;
+        setStatus(msg.message || "Simulation started.", "ok");
+        _dbg("init_ack: " + msg.cols + "x" + msg.rows + " grid, cell=" + (msg.cell_m || 0).toFixed(0) + "m", "#89b4fa");
+        if (msg.osm_overlay_stats) {
+          var s = msg.osm_overlay_stats;
+          _dbg("OSM overlay active: roads=" + (s.road_cells || 0) + " cells, urban=" + (s.urban_cells || 0) + " cells", "#a6e3a1");
+        }
+        _initFireOverlay(msg.rows, msg.cols,
+                         msg.lat_min, msg.lat_max, msg.lon_min, msg.lon_max);
+        if (msg.geojson_fuel_map) _initVegMap(msg.geojson_fuel_map);
+        map.fitBounds(
+          [[msg.lon_min, msg.lat_min], [msg.lon_max, msg.lat_max]],
+          { padding: 40, duration: 800 }
+        );
+        if (msg.wind_u_grid && msg.wind_v_grid) {
+          _initWindStreamlines(msg.wind_u_grid, msg.wind_v_grid,
+                               msg.wind_grid_rows, msg.wind_grid_cols,
+                               msg.lat_min, msg.lat_max, msg.lon_min, msg.lon_max);
+        }
+        if (msg.hourly_weather && msg.hourly_weather.length > 0) {
+          var hw = msg.hourly_weather[0];
+          _showWeatherStrip({
+            wind_speed_ms: hw.wind_speed_ms, wind_direction: hw.wind_direction,
+            temperature_c: hw.temperature_c, relative_humidity: hw.relative_humidity,
+          });
+        }
+
+      } else if (msg.type === "weather_update") {
+        _showWeatherStrip(msg);
+
+      } else if (msg.type === "status") {
+        setStatus(msg.message, "info");
+        _dbg("Status: " + msg.message, "#a6adc8");
+        if (msg.message && msg.message.startsWith("Scrubbing")) {
+          document.getElementById("btn-pause").style.display  = "none";
+          document.getElementById("btn-resume").style.display = "block";
+        }
+
+      } else if (msg.type === "error") {
+        setStatus("Error: " + msg.message, "err");
+        _dbg("Error: " + msg.message, "#f38ba8");
+
+      } else if (msg.type === "frame") {
+        renderFireFrame(msg);
+        _renderGlow(msg.geojson_burning);
+        _spawnSmoke(msg.geojson_burning);
+        var elapsed = msg.minutes_since_ignition;
+        var wall    = msg.wall_clock_minutes;
+        updateStats(msg.step, msg.active_ha, msg.burned_ha, elapsed, wall);
+        _applyAtmoOverlay(elapsed || 0);
+        _showWeatherStrip({ simMinutes: elapsed, wall_clock_minutes: wall });
+        _updateRiskPanel(msg.step, msg.active_ha, msg.burned_ha, elapsed,
+                         { N: msg.ros_N || 0, E: msg.ros_E || 0,
+                           S: msg.ros_S || 0, W: msg.ros_W || 0 });
+        _updateAudio(msg.active_ha);
+        var sc = document.getElementById("scrubber");
+        if (sc && simRunning) {
+          if (+sc.max < msg.step) sc.max = msg.step;
+          sc.value = msg.step;
+        }
+        if (msg.step % 100 === 0) {
+          _dbg("Step " + msg.step + ": active=" + (msg.active_ha || 0).toFixed(1) +
+               "ha burned=" + (msg.burned_ha || 0).toFixed(1) + "ha", "#f9e2af");
+        }
+
+      } else if (msg.type === "history_ready") {
+        _setupScrubber(msg);
+
+      } else if (msg.type === "scrub_frame") {
+        _updateScrubFrame(msg);
+      }
+    }
+
+    // ── Simulation control ────────────────────────────────────────────────────
+    function runSimulation() {
+      if (!ignitionPoints.length) {
+        setStatus("Add at least one ignition point first.", "err");
+        return;
+      }
+      _initAudio();
+      if (_audioCtx && _audioCtx.state === "suspended") _audioCtx.resume();
+      if (ws) { ws.close(); ws = null; }
+
+      var lat_c   = ignitionPoints.reduce(function (s, p) { return s + p.lat; }, 0) / ignitionPoints.length;
+      var lon_c   = ignitionPoints.reduce(function (s, p) { return s + p.lng; }, 0) / ignitionPoints.length;
+      var half    = parseFloat(document.getElementById("bbox").value) || 0.25;
+      var dateVal = document.getElementById("date-start").value;
+      var ignTime = document.getElementById("ignition-time").value || "14:00";
+
+      var parts = ignTime.split(":");
+      var ignH  = parseInt(parts[0], 10) || 14;
+      var ignM  = parseInt(parts[1], 10) || 0;
+      _initTime         = dateVal ? new Date(dateVal + "T" + ignTime + ":00Z") : null;
+      _ignitionWallHour = ignH + ignM / 60;
+      window._simHistory = null;
+      simRunning = true;
+
+      var approxBbox = {
+        lon_min: lon_c - half, lon_max: lon_c + half,
+        lat_min: lat_c - half, lat_max: lat_c + half,
+      };
+      var initMsg = {
+        type:              "init",
+        lat_center:        lat_c,
+        lon_center:        lon_c,
+        bbox_degrees:      half,
+        ignition_points:   ignitionPoints.map(function (p) { return { lat: p.lat, lon: p.lng }; }),
+        wind_speed_ms:     parseFloat(document.getElementById("wind-speed").value)  || 5,
+        wind_dir_deg:      parseFloat(document.getElementById("wind-dir").value)    || 330,
+        temperature_c:     parseFloat(document.getElementById("temperature").value) || 35,
+        relative_humidity: parseFloat(document.getElementById("humidity").value)    || 25,
+        ignition_time_utc: ignTime,
+      };
+      if (dateVal) { initMsg.date_start = dateVal; initMsg.date_end = dateVal; }
+
+      document.getElementById("btn-run").style.display    = "none";
+      document.getElementById("btn-pause").style.display  = "block";
+      document.getElementById("btn-resume").style.display = "none";
+      setStatus("Connecting to ws://localhost:8765...", "info");
+
+      ws = new WebSocket(WS_URL);
+      ws.onopen = function () {
+        setStatus("Connected. Sending init...", "info");
+        ws.send(JSON.stringify(initMsg));
+        map.fitBounds(
+          [[approxBbox.lon_min, approxBbox.lat_min], [approxBbox.lon_max, approxBbox.lat_max]],
+          { padding: 40, duration: 1000 }
+        );
+        if (!_smokeRAF) _animateSmoke();
+      };
+      ws.onmessage = function (ev) {
+        var msg;
+        try { msg = JSON.parse(ev.data); } catch (e) { return; }
+        _handleMsg(msg);
+      };
+      ws.onerror = function () {
+        setStatus("Connection error — is server.py running? (python server.py)", "err");
+        _resetButtons();
+        simRunning = false;
+      };
+      ws.onclose = function () {
+        setStatus("Simulation finished.", "ok");
+        simRunning = false;
+        _resetButtons();
+        _updateAudio(0);
+      };
+    }
+
+    function pauseSim() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "pause" }));
+        simRunning = false;
+        document.getElementById("btn-pause").style.display  = "none";
+        document.getElementById("btn-resume").style.display = "block";
+      }
+    }
+
+    function resumeSim() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resume" }));
+        simRunning = true;
+        document.getElementById("btn-pause").style.display  = "block";
+        document.getElementById("btn-resume").style.display = "none";
+      }
+    }
+
+    function _resetButtons() {
+      document.getElementById("btn-run").style.display    = "block";
+      document.getElementById("btn-pause").style.display  = "none";
+      document.getElementById("btn-resume").style.display = "none";
+    }
+
+    function clearAll() {
+      if (ws) { ws.close(); ws = null; }
+      ignitionPoints.length    = 0;
+      firebreakPoints          = [];
+      committedFirebreaks.length = 0;
+      waterDrops.length        = 0;
+      simRunning               = false;
+      window._simHistory       = null;
+      _fireOverlayReady        = false;
+      _fireBbox                = null;
+
+      if (map.getSource(SRC_IGNITE))    map.getSource(SRC_IGNITE).setData(emptyFC());
+      if (map.getSource(SRC_FIREBREAK)) map.getSource(SRC_FIREBREAK).setData(emptyFC());
+      if (map.getSource(SRC_WATER))     map.getSource(SRC_WATER).setData(emptyFC());
+
+      // Remove fire overlay layers/sources
+      if (map.getLayer("fire-burning-layer")) map.removeLayer("fire-burning-layer");
+      if (map.getLayer("fire-burned-layer"))  map.removeLayer("fire-burned-layer");
+      if (map.getSource(SRC_BURNING))          map.removeSource(SRC_BURNING);
+      if (map.getSource(SRC_BURNED))           map.removeSource(SRC_BURNED);
+
+      if (_smokeRAF) { cancelAnimationFrame(_smokeRAF); _smokeRAF = null; }
+      if (_windRAF)  { cancelAnimationFrame(_windRAF);  _windRAF  = null; }
+      _particles.length = 0;
+
+      // Clear effect canvases only (glow, smoke, wind)
+      ["glow-canvas", "smoke-canvas", "wind-canvas"].forEach(function (id) {
+        var c = document.getElementById(id);
+        if (c) { var ctx = c.getContext("2d"); ctx.clearRect(0, 0, c.width, c.height); }
+      });
+
+      document.getElementById("atmo-overlay").style.backgroundColor = "rgba(0,0,0,0)";
+      document.getElementById("weather-strip").classList.remove("visible");
+      document.getElementById("timeline-bar").classList.remove("visible");
+
+      _updateAudio(0);
+      refreshIgnList();
+      updateStats(null, null, null, null, null);
+      _resetButtons();
+      document.getElementById("speed-slider").value          = 1;
+      document.getElementById("speed-val").textContent       = "1×";
+      setStatus("Cleared. Drop ignition points then click Run Simulation.", "info");
+      _dbg("Cleared.", "#a6adc8");
+    }
+
+    // ── Initialise drawing mode ───────────────────────────────────────────────
+    setMode("ignite");
+  </script>
+</body>
+</html>

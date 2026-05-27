@@ -12,6 +12,7 @@ A drone-assisted wildfire digital twin for the Mediterranean. WILSON ingests rea
 2. [Project Structure](#2-project-structure)
 3. [Quick Start](#3-quick-start)
    - 3.5 Recent Changes
+   - 3.6 Sandbox Web UI (`sandbox.html` + `server.py`)
 4. [Data Acquisition Pipeline](#4-data-acquisition-pipeline)
    - 4.1 NASA FIRMS — Active Fire Detections
    - 4.2 Copernicus COP30 DEM — Terrain
@@ -86,6 +87,8 @@ Copernicus SHP ──────┘                             Monte Carlo Spo
 Fire_Project-main/
 │
 ├── gui_launcher.py          ← Main entry point  (python gui_launcher.py)
+├── server.py                ← WebSocket simulation server for sandbox UI
+├── sandbox.html             ← Interactive browser sandbox (MapLibre + controls)
 ├── config.py                ← Global constants (grid, dt, Rothermel tuning)
 ├── api_key.txt              ← OpenTopography API key
 │
@@ -197,14 +200,77 @@ By default WILSON seeds ignition from the **first FIRED day** (day 1). You can n
 **Module:** `pipeline/auto_fetcher.py → fetch_osm_features()`  
 **Applied in:** `core/landscape.py → apply_osm_overlay()`
 
-Roads (highways) and urban landuse areas from OSM are overlaid on the fuel map as slow-burning `Urban Road` and `Urban Fabric` fuel types. Two bugs were fixed:
+Roads (highways) and urban landuse areas from OSM are overlaid on the fuel map from Overpass GeoJSON. Current behaviour:
+
+- `Urban_Road`, `Urban_Fabric`, `Water`, and `Non_Combustible` are treated as **non-burning** in `Landscape.get_fuel_at()`.
+- OSM roads are rasterized as **single-cell centerlines** (no road buffer expansion), so they act as thin barriers.
+- OSM urban polygons overwrite coarse CORINE cells where available, improving city masking.
+
+Recent fixes:
 
 | Bug | Symptom | Fix |
 |-----|---------|-----|
 | **Relation types ignored** | Large city districts and industrial zones (stored as OSM *relation* multipolygons) were silently skipped | Parser now handles both `way` and `relation` types; outer-ring member geometries are stitched into a single polygon |
-| **Roads too wide** | The road raster buffer was `cell_size × 0.4` ≈ 50–110 m — far wider than a real road | Reduced multiplier to `0.15` → roads are ~1 cell wide, acting as thin firebreaks rather than broad barriers |
+| **Roads too wide** | Buffered road rasterization created unrealistically broad road corridors | Buffering removed; roads are rasterized from true line centerlines (`all_touched=False`) |
 
-The Overpass POST request now also sends the correct `Content-Type: application/x-www-form-urlencoded` header, fixing the `406 Not Acceptable` errors from the primary endpoints.
+The Overpass client now tries canonical form-encoded `POST` (`data=<query>`) plus `GET` and raw-text `POST` fallbacks, which resolves mirror-specific `406 Not Acceptable` responses.
+
+---
+
+## 3.6 Sandbox Web UI (`sandbox.html` + `server.py`)
+
+The sandbox is a browser-based interactive runner for real-time intervention testing.
+
+### Run
+
+Terminal 1:
+```bash
+python server.py
+```
+
+Terminal 2 (from project root):
+```bash
+python -m http.server 8000
+```
+
+Open:
+```text
+http://localhost:8000/sandbox.html
+```
+
+### What it does
+
+- Builds an 800×800 simulation grid around your ignition points.
+- Fetches and applies:
+  - DEM terrain (`fetch_terrain_from_api`)
+  - CORINE land cover (`fetch_corine_land_cover`)
+  - OSM roads + urban overlays (`fetch_osm_features`)
+- Streams simulation frames over WebSocket (`ws://localhost:8765`) to the map UI.
+
+### Controls
+
+- **Ignite**: place ignition points.
+- **Break**: draw polyline firebreaks and apply.
+- **Water**: drop suppression circles (current radius: **435 m**).
+- **Pause/Resume**, speed slider, scrub timeline/history replay.
+- Map tabs: satellite / vegetation.
+
+### Current intervention semantics
+
+- **Firebreak**:
+  - Converts crossed cells to `Non_Combustible`.
+  - Applies a hard blocked mask in the CA model (cannot ignite/spread through).
+- **Water drop**:
+  - Extinguishes active cells in the drop mask.
+  - Preserves already burned scars (`state=2`) so burn history remains visible.
+  - Applies temporary wetness damping that decays over time.
+
+### Urban / road behaviour in sandbox
+
+- Ignition and spread are blocked in `Urban_Fabric`, `Urban_Road`, `Water`, and `Non_Combustible`.
+- If an ignition point falls entirely in non-burning area, the server skips it and reports the skip count in `init_ack.message`.
+- On simulation start, sandbox debug logs include OSM overlay stats:
+  - `roads=<N> cells, urban=<M> cells`
 
 ---
 

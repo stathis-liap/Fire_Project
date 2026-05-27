@@ -58,6 +58,11 @@ class CellularAutomataFire:
         self.state             = np.zeros((rows, cols), dtype=np.int8)
         self.burn_timer        = np.zeros((rows, cols), dtype=np.float32)
         self.ignition_fraction = np.zeros((rows, cols), dtype=np.float32)
+        # Dynamic suppression fields:
+        # blocked_mask=True  -> cell cannot ignite/spread (firebreaks / hard barriers)
+        # wetness in [0,1]   -> dampens incoming ignition heat (water drops)
+        self.blocked_mask     = np.zeros((rows, cols), dtype=np.bool_)
+        self.wetness          = np.zeros((rows, cols), dtype=np.float32)
 
         config_dt = config.dt if hasattr(config, 'dt') else 0.1
         self.dt   = dt if dt is not None else config_dt
@@ -80,9 +85,34 @@ class CellularAutomataFire:
 
     def ignite(self, r: int, c: int) -> None:
         """Set a single cell alight."""
-        if self.state[r, c] == 0:
+        if not self.landscape.get_fuel_at(r, c):
+            return
+        if self.state[r, c] == 0 and not self.blocked_mask[r, c]:
             self.state[r, c] = 1
             self.burn_timer[r, c] = self._burn_time_steps
+
+    def apply_firebreak_mask(self, mask: np.ndarray) -> None:
+        """Apply an absolute spread barrier to all True cells in mask."""
+        if mask.shape != self.state.shape:
+            raise ValueError("firebreak mask shape mismatch")
+        self.blocked_mask[mask] = True
+        self.wetness[mask] = 1.0
+        self.state[mask] = 0
+        self.burn_timer[mask] = 0
+        self.ignition_fraction[mask] = 0.0
+
+    def apply_water_mask(self, mask: np.ndarray, wetness: float = 0.92) -> None:
+        """Apply temporary wetting to True cells in mask (0..1 damping scale)."""
+        if mask.shape != self.state.shape:
+            raise ValueError("water mask shape mismatch")
+        wet = float(np.clip(wetness, 0.0, 1.0))
+        self.wetness[mask] = np.maximum(self.wetness[mask], wet)
+        active = mask & (self.state == 1)
+        self.state[active] = 0
+        self.burn_timer[active] = 0
+        # Keep already-burned (state==2) scars intact; clear heat only on non-burned cells.
+        clear_heat = mask & (self.state != 2)
+        self.ignition_fraction[clear_heat] = 0.0
 
 
     def _precompute_ros_grid(self) -> None:
@@ -150,6 +180,7 @@ class CellularAutomataFire:
         base_ros_denominator = np.where(denom > 0, denom, 1e-9)
 
         valid_cells = (denom > 0) & (ir > 0) & valid_fuel
+        self._combustible_mask = valid_cells
 
         # 5a. Compute terrain-modified, mass-consistent midflame wind field
         #     via air/air.py (WAF + upslope draft + Poisson correction).
@@ -211,6 +242,14 @@ class CellularAutomataFire:
         
         # 1. Update Burn Timers using Boolean masks
         burning_mask = (self.state == 1)
+        if self.blocked_mask.any():
+            # Safety: barriers can never stay burning.
+            blocked_burning = burning_mask & self.blocked_mask
+            if blocked_burning.any():
+                self.state[blocked_burning] = 0
+                self.burn_timer[blocked_burning] = 0
+                self.ignition_fraction[blocked_burning] = 0.0
+                burning_mask[blocked_burning] = False
         self.burn_timer[burning_mask] -= 1
 
         # Turn cells to ash (2) when timer expires
@@ -219,7 +258,8 @@ class CellularAutomataFire:
         burning_mask[burned_out] = False # Update the mask to exclude new ash
 
         # 2. Accumulate heat (ignition fraction) onto unburned cells
-        unburned_mask = (self.state == 0)
+        unburned_mask = (self.state == 0) & (~self.blocked_mask) & self._combustible_mask
+        dry_factor = 1.0 - self.wetness
 
         for i, (dr, dc) in enumerate(self._neighbors):
             # Shift the burning mask to overlay onto the unburned target cells
@@ -227,7 +267,8 @@ class CellularAutomataFire:
             threatened = burning_neighbors & unburned_mask
             
             # Add the precise fractional heat from that specific neighbor
-            self.ignition_fraction[threatened] += self.p_spread[i][threatened]
+            heat = self.p_spread[i] * dry_factor
+            self.ignition_fraction[threatened] += heat[threatened]
 
         # 3. Deterministic Ignition: Any cell that accumulated >= 1.0 heat catches fire
         ignited = unburned_mask & (self.ignition_fraction >= 1.0)
@@ -239,7 +280,13 @@ class CellularAutomataFire:
         # 4. Monte Carlo Spotting: firebrands lofted from the active front,
         #    carried downwind, land ahead of the main front and may ignite spots.
         if burning_mask.any():
-            self._apply_spotting(burning_mask, (self.state == 0))
+            self._apply_spotting(burning_mask, unburned_mask)
+
+        # 5. Dry-down: water drops lose effectiveness over time.
+        if np.any(self.wetness > 0.0):
+            self.wetness *= 0.996
+            self.wetness[self.wetness < 0.01] = 0.0
+            self.wetness[self.blocked_mask] = 1.0
 
     # ──────────────────────────────────────────────────────────────────────────
     # Monte Carlo spotting model
