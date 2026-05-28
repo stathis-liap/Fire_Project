@@ -7,6 +7,8 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.css" />
   <script src="https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.js"></script>
+  <!-- D. Plotly.js for interactive 3D mesh carousel -->
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
@@ -250,6 +252,117 @@
       font: 11px/1.5 monospace; padding: 8px 12px; border-radius: 6px;
       max-width: 400px; max-height: 220px; overflow-y: auto; pointer-events: none;
     }
+
+    /* ── 3D terrain mesh popup (middle-click) ────────────────────────────── */
+    #mesh-popup {
+      position: fixed; width: 520px; height: 460px;
+      background: rgba(10,10,18,0.97);
+      border: 1.5px solid rgba(249,226,47,0.28);
+      border-radius: 10px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.75), 0 0 22px rgba(249,226,47,0.07);
+      z-index: 1100; display: none; flex-direction: column; overflow: hidden;
+    }
+    #mesh-popup.visible { display: flex; }
+    #mesh-popup-header {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 8px 12px;
+      background: rgba(18,18,30,0.99);
+      border-bottom: 1px solid rgba(249,226,47,0.10);
+      cursor: move; flex-shrink: 0; user-select: none;
+    }
+    #mesh-popup-title {
+      font-size: 10.5px; color: #f9e2af; font-weight: 700;
+      letter-spacing: 0.04em; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; flex: 1;
+    }
+    .mesh-step-row { display: flex; align-items: center; gap: 3px; margin-top: 3px; }
+    .mesh-step-tag {
+      font-size: 8.5px; font-weight: 700; padding: 1px 5px;
+      border-radius: 3px; letter-spacing: 0.05em;
+      background: #1e1e2e; color: #45475a;
+      border: 1px solid transparent;
+      transition: background 0.25s, color 0.25s, border-color 0.25s;
+    }
+    .mesh-step-tag.active {
+      background: rgba(137,180,250,0.13); color: #89b4fa;
+      border-color: rgba(137,180,250,0.35);
+    }
+    .mesh-step-tag.done {
+      background: rgba(166,227,161,0.10); color: #a6e3a1;
+      border-color: rgba(166,227,161,0.25);
+    }
+    .mesh-step-arrow { color: #313244; font-size: 8px; }
+    #mesh-popup-close {
+      background: none; border: none; color: #585b70;
+      cursor: pointer; font-size: 15px; padding: 0 2px; line-height: 1;
+      flex-shrink: 0; transition: color 0.15s;
+    }
+    #mesh-popup-close:hover { color: #f38ba8; }
+    #mesh-popup-body {
+      flex: 1; position: relative; overflow: hidden;
+      background: #060612; min-height: 0;
+    }
+    #mesh-popup-loading {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 6px; pointer-events: none;
+    }
+    #mesh-popup-canvas-wrap {
+      width: 100%; height: 100%; display: none; position: relative;
+    }
+
+    /* ── Carousel inside popup ───────────────────────────────────────────── */
+    #mesh-carousel-wrap {
+      position: relative; width: 100%; height: 100%; overflow: hidden; display: none;
+    }
+    #mesh-slides {
+      display: flex; width: 300%; height: 100%;
+      transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .mesh-slide { width: 33.333%; height: 100%; flex-shrink: 0; position: relative; }
+    .mesh-slide-label {
+      position: absolute; top: 7px; left: 50%; transform: translateX(-50%);
+      font-size: 9px; font-weight: 700; color: #6c7086;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      background: rgba(8,8,20,0.75); padding: 2px 9px; border-radius: 3px;
+      pointer-events: none; z-index: 5; white-space: nowrap;
+    }
+    .mesh-nav-btn {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      width: 26px; height: 26px; border-radius: 50%;
+      background: rgba(18,18,32,0.82); border: 1px solid rgba(137,180,250,0.22);
+      color: #89b4fa; font-size: 14px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      z-index: 10; transition: background 0.15s, opacity 0.2s; opacity: 0.55;
+      user-select: none; padding: 0;
+    }
+    .mesh-nav-btn:hover { background: rgba(40,40,80,0.96); opacity: 1; }
+    #mesh-nav-prev { left: 5px; }
+    #mesh-nav-next { right: 5px; }
+    .mesh-dots {
+      position: absolute; bottom: 7px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 5px; z-index: 10;
+    }
+    .mesh-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: #313244; border: 1px solid #45475a; cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .mesh-dot.active { background: #f9e2af; border-color: #f9e2af; }
+    /* E. Wind toggle button */
+    #mesh-wind-btn {
+      background: rgba(30,30,50,0.8); border: 1px solid rgba(137,220,235,0.22);
+      border-radius: 5px; color: #6c7086; cursor: pointer; flex-shrink: 0;
+      font-size: 9.5px; padding: 3px 8px; transition: all 0.15s; white-space: nowrap;
+    }
+    #mesh-wind-btn:hover  { background: rgba(50,50,90,0.8); color: #89dceb; border-color: rgba(137,220,235,0.50); }
+    #mesh-wind-btn.active { background: rgba(137,220,235,0.15); color: #89dceb; border-color: rgba(137,220,235,0.70); }
+    #mesh-del-btn {
+      background: rgba(30,30,50,0.8); border: 1px solid rgba(243,139,168,0.22);
+      border-radius: 5px; color: #6c7086; cursor: pointer; flex-shrink: 0;
+      font-size: 9.5px; padding: 3px 8px; transition: all 0.15s; white-space: nowrap;
+    }
+    #mesh-del-btn:hover { background: rgba(80,20,35,0.9); color: #f38ba8; border-color: rgba(243,139,168,0.65); }
   </style>
 </head>
 <body>
@@ -1173,6 +1286,8 @@
     }
 
     function onMapClick(e) {
+      // Bug-a fix: Ctrl+click is reserved for 3D pin placement — never place ignition.
+      if (e.originalEvent && e.originalEvent.ctrlKey) return;
       var lat = e.lngLat.lat, lng = e.lngLat.lng;
       if (mode === "ignite") {
         ignitionPoints.push({ lat: lat, lng: lng });
@@ -1456,6 +1571,19 @@
 
     function clearAll() {
       if (ws) { ws.close(); ws = null; }
+      // Remove 3D pin markers and close the mesh popup
+      if (typeof _3dPinMarkers !== 'undefined') {
+        _3dPinMarkers.forEach(function(pin) {
+          map.off('move',   pin.reposition);
+          map.off('zoom',   pin.reposition);
+          map.off('rotate', pin.reposition);
+          map.off('pitch',  pin.reposition);
+          map.off('resize', pin.reposition);
+          if (pin.el.parentNode) pin.el.parentNode.removeChild(pin.el);
+        });
+        _3dPinMarkers.length = 0;
+      }
+      if (typeof closeMeshPopup === 'function') closeMeshPopup();
       ignitionPoints.length    = 0;
       firebreakPoints          = [];
       committedFirebreaks.length = 0;
@@ -1501,6 +1629,452 @@
 
     // ── Initialise drawing mode ───────────────────────────────────────────────
     setMode("ignite");
+  </script>
+  <!-- Mesh preview modal + logic -->
+  <div id="mesh-modal" style="display:none; position:fixed; inset:0; z-index:1200; background:rgba(0,0,0,0.8);">
+    <div style="position:absolute; right:18px; top:18px; z-index:1210;">
+      <button onclick="closeMeshModal()" style="padding:8px 12px; font-weight:700;">Close</button>
+    </div>
+    <div id="mesh-canvas-container" style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:85vw; height:85vh; background:#0a0a14; border-radius:8px; overflow:hidden; display:flex;">
+    </div>
+  </div>
+
+  <!-- 3D terrain mesh popup — opens on middle-click -->
+  <div id="mesh-popup">
+    <div id="mesh-popup-header">
+      <div style="overflow:hidden;flex:1;min-width:0">
+        <div id="mesh-popup-title">3D Terrain Mesh</div>
+        <div class="mesh-step-row">
+          <span class="mesh-step-tag" id="mstep-dem">DEM</span>
+          <span class="mesh-step-arrow">→</span>
+          <span class="mesh-step-tag" id="mstep-pts">Point Cloud</span>
+          <span class="mesh-step-arrow">→</span>
+          <span class="mesh-step-tag" id="mstep-tri">Surface</span>
+        </div>
+      </div>
+      <!-- E. Wind button + close -->
+      <button id="mesh-wind-btn" onclick="toggleMeshWind()" title="Overlay wind arrows (reads panel Wind Speed / Dir)">🌬 Wind</button>
+      <button id="mesh-del-btn"  onclick="deleteMeshPin()"   title="Remove this 3D pin from the map">✕ Pin</button>
+      <button id="mesh-popup-close" onclick="closeMeshPopup()" title="Close">✕</button>
+    </div>
+    <div id="mesh-popup-body">
+      <!-- Loading state -->
+      <div id="mesh-popup-loading">
+        <div style="font-size:11px;color:#f9e2af;font-weight:600">Building 3D mesh…</div>
+        <div id="mesh-popup-loadstep" style="font-size:10px;color:#585b70">—</div>
+      </div>
+      <!-- 3-slide carousel — D. Plotly divs replace img tags -->
+      <div id="mesh-carousel-wrap">
+        <div id="mesh-slides">
+          <!-- Slide 0: DEM Heatmap (Plotly) -->
+          <div class="mesh-slide" id="mesh-slide-0">
+            <div id="mesh-plot-0" style="width:100%;height:100%;"></div>
+          </div>
+          <!-- Slide 1: Point Cloud 3D (Plotly) -->
+          <div class="mesh-slide" id="mesh-slide-1">
+            <div id="mesh-plot-1" style="width:100%;height:100%;"></div>
+          </div>
+          <!-- Slide 2: Terrain Surface (Plotly) -->
+          <div class="mesh-slide" id="mesh-slide-2">
+            <div id="mesh-plot-2" style="width:100%;height:100%;"></div>
+          </div>
+        </div>
+        <!-- Nav arrows (hover to reveal) -->
+        <button class="mesh-nav-btn" id="mesh-nav-prev" onclick="meshSlide(-1)">&#8249;</button>
+        <button class="mesh-nav-btn" id="mesh-nav-next" onclick="meshSlide(+1)">&#8250;</button>
+        <!-- Slide dots -->
+        <div class="mesh-dots">
+          <div class="mesh-dot active" id="mesh-dot-0" onclick="meshGoTo(0)"></div>
+          <div class="mesh-dot"        id="mesh-dot-1" onclick="meshGoTo(1)"></div>
+          <div class="mesh-dot"        id="mesh-dot-2" onclick="meshGoTo(2)"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  // Right-click -> request matplotlib mesh images and show in full-screen modal
+  map.on('contextmenu', function (e) {
+    var lat = e.lngLat.lat, lon = e.lngLat.lng;
+    var bboxDeg = Math.min(parseFloat(document.getElementById('bbox').value) || 0.025, 0.04);
+    setStatus('Requesting 3D mesh…', 'info');
+    var container = document.getElementById('mesh-canvas-container');
+    container.innerHTML = '<div style="color:#a6adc8;font-size:13px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">Generating plots…</div>';
+    document.getElementById('mesh-modal').style.display = 'block';
+    fetch('http://localhost:5000/mesh', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ lat: lat, lon: lon, bbox_deg: bboxDeg })
+    }).then(function(r){ return r.json(); }).then(function(data){
+      if (!data || !data.plotly_dem) { setStatus('Invalid mesh response', 'err'); return; }
+      container.innerHTML = '';
+      var cfg = { responsive: true, displayModeBar: false, scrollZoom: true, displaylogo: false };
+      var ids = [
+        ['modal-plot-0', data.plotly_dem],
+        ['modal-plot-1', data.plotly_pts],
+        ['modal-plot-2', data.plotly_tri],
+      ];
+      ids.forEach(function (p) {
+        var d = document.createElement('div');
+        d.id = p[0]; d.style.cssText = 'flex:1;height:100%;min-width:0;';
+        container.appendChild(d);
+        var fig = JSON.parse(p[1]);
+        Plotly.react(d, fig.data, fig.layout, cfg);
+      });
+      setStatus('3D mesh ready — close to return to map.', 'ok');
+    }).catch(function(err){
+      console.error(err);
+      container.innerHTML = '<div style="color:#f38ba8;font-size:13px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">Error: ' + err + '<br><small>(run: python mesh_api.py)</small></div>';
+      setStatus('Mesh request failed: ' + err, 'err');
+    });
+  });
+
+  function closeMeshModal(){ document.getElementById('mesh-modal').style.display='none'; setStatus('Closed mesh preview.', 'info'); }
+  </script>
+
+  <!-- ── 3D popup: Ctrl+click, yellow pins, Plotly interactive carousel ──── -->
+  <script>
+  var MESH_API_URL      = 'http://localhost:5000/mesh';
+  var _3dPinMarkers     = [];
+  var _meshCurrentSlide = 0;
+  var _meshCache        = {};     // B. location cache  key="lat:lon:bbox"
+  var _meshWindOn       = false;  // E. wind-overlay state
+  var _meshWindGrid     = null;   // E. grid metadata for arrow placement
+  var _meshActiveLat    = null;   // lat/lon of the pin whose popup is open
+  var _meshActiveLon    = null;
+
+  // ── Drag-to-move (skip when clicking buttons) ─────────────────────────────
+  (function () {
+    var popup = document.getElementById('mesh-popup');
+    var hdr   = document.getElementById('mesh-popup-header');
+    var dragging = false, ox = 0, oy = 0;
+    hdr.addEventListener('mousedown', function (e) {
+      if (e.button !== 0 || e.target.closest('button')) return;
+      var r = popup.getBoundingClientRect();
+      ox = e.clientX - r.left; oy = e.clientY - r.top;
+      dragging = true; e.preventDefault();
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      popup.style.left = Math.max(0, Math.min(e.clientX - ox, window.innerWidth  - popup.offsetWidth))  + 'px';
+      popup.style.top  = Math.max(0, Math.min(e.clientY - oy, window.innerHeight - popup.offsetHeight)) + 'px';
+    });
+    document.addEventListener('mouseup', function () { dragging = false; });
+  }());
+
+  // ── Pipeline step indicators ───────────────────────────────────────────────
+  function _setMeshStep(step) {
+    var steps = ['dem', 'pts', 'tri'], idx = steps.indexOf(step);
+    steps.forEach(function (s, i) {
+      var el = document.getElementById('mstep-' + s);
+      if (el) el.className = 'mesh-step-tag' +
+        (step === 'done' || i < idx ? ' done' : i === idx ? ' active' : '');
+    });
+  }
+
+  // ── Carousel navigation — D. trigger Plotly resize after transition ────────
+  function meshGoTo(idx) {
+    _meshCurrentSlide = Math.max(0, Math.min(2, idx));
+    document.getElementById('mesh-slides').style.transform =
+      'translateX(-' + (_meshCurrentSlide * 33.3333) + '%)';
+    [0, 1, 2].forEach(function (i) {
+      var d = document.getElementById('mesh-dot-' + i);
+      if (d) d.className = 'mesh-dot' + (i === _meshCurrentSlide ? ' active' : '');
+    });
+    document.getElementById('mesh-nav-prev').style.opacity = _meshCurrentSlide === 0 ? '0.22' : '';
+    document.getElementById('mesh-nav-next').style.opacity = _meshCurrentSlide === 2 ? '0.22' : '';
+    setTimeout(function () {
+      var el = document.getElementById('mesh-plot-' + _meshCurrentSlide);
+      if (el && el._fullLayout) { try { Plotly.Plots.resize(el); } catch (ex) {} }
+    }, 310);
+  }
+  function meshSlide(dir) { meshGoTo(_meshCurrentSlide + dir); }
+
+  // ── Open popup ─────────────────────────────────────────────────────────────
+  function deleteMeshPin() {
+    var idx = _3dPinMarkers.findIndex(function(p) {
+      return p.lat === _meshActiveLat && p.lon === _meshActiveLon;
+    });
+    if (idx >= 0) {
+      var pin = _3dPinMarkers[idx];
+      map.off('move',   pin.reposition);
+      map.off('zoom',   pin.reposition);
+      map.off('rotate', pin.reposition);
+      map.off('pitch',  pin.reposition);
+      map.off('resize', pin.reposition);
+      if (pin.el.parentNode) pin.el.parentNode.removeChild(pin.el);
+      _3dPinMarkers.splice(idx, 1);
+    }
+    closeMeshPopup();
+  }
+
+  function openMeshPopup(lat, lon, screenX, screenY) {
+    _meshActiveLat = lat;
+    _meshActiveLon = lon;
+    var popup = document.getElementById('mesh-popup');
+    var pw = 520, ph = 460;
+    popup.style.left   = Math.max(10, Math.min(screenX + 18, window.innerWidth  - pw - 10)) + 'px';
+    popup.style.top    = Math.max(10, Math.min(screenY - 70, window.innerHeight - ph - 10)) + 'px';
+    popup.style.width  = pw + 'px';
+    popup.style.height = ph + 'px';
+    document.getElementById('mesh-popup-title').textContent =
+      '3D Terrain  —  ' + lat.toFixed(4) + '°N  ' + lon.toFixed(4) + '°E';
+    popup.classList.add('visible');
+
+    var bboxDeg   = Math.min(parseFloat(document.getElementById('bbox').value) || 0.025, 0.04);
+    var windSpeed = parseFloat(document.getElementById('wind-speed').value) || null;
+    var windDir   = parseFloat(document.getElementById('wind-dir').value)   || null;
+    var cacheKey  = lat.toFixed(4) + ':' + lon.toFixed(4) + ':' + bboxDeg.toFixed(4);
+
+    // B. Serve from cache if available
+    if (_meshCache[cacheKey]) {
+      document.getElementById('mesh-popup-loading').style.display = 'none';
+      document.getElementById('mesh-carousel-wrap').style.display = 'block';
+      _setMeshStep('done');
+      _showCarousel(_meshCache[cacheKey]);
+      setStatus('3D plots loaded from cache.', 'ok');
+      return;
+    }
+
+    document.getElementById('mesh-popup-loading').style.display = 'flex';
+    document.getElementById('mesh-carousel-wrap').style.display = 'none';
+    document.getElementById('mesh-popup-loadstep').textContent  = 'Fetching DEM…';
+    _setMeshStep('dem');
+
+    fetch(MESH_API_URL, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat: lat, lon: lon, bbox_deg: bboxDeg,
+                              wind_speed: windSpeed, wind_dir: windDir })
+    })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      _setMeshStep('pts');
+      document.getElementById('mesh-popup-loadstep').textContent = 'Building point cloud…';
+      return r.json();
+    })
+    .then(function (data) {
+      _setMeshStep('tri');
+      document.getElementById('mesh-popup-loadstep').textContent = 'Rendering Plotly figures…';
+      _meshCache[cacheKey] = data;
+      return new Promise(function (res) { setTimeout(function () { res(data); }, 30); });
+    })
+    .then(function (data) {
+      _setMeshStep('done');
+      _showCarousel(data);
+    })
+    .catch(function (err) {
+      document.getElementById('mesh-popup-loadstep').textContent =
+        'Error: ' + err + '  (run: python mesh_api.py)';
+      _dbg('Mesh popup error: ' + err, '#f38ba8');
+    });
+  }
+
+  // ── D. Render interactive Plotly figures into carousel slides ─────────────
+  function _showCarousel(data) {
+    if (!data || !data.plotly_dem) {
+      document.getElementById('mesh-popup-loadstep').textContent = 'No plot data received.';
+      return;
+    }
+    _meshWindGrid = data.wind_grid || null;
+
+    var pairs = [
+      ['mesh-plot-0', data.plotly_dem],
+      ['mesh-plot-1', data.plotly_pts],
+      ['mesh-plot-2', data.plotly_tri],
+    ];
+    var cfg = {
+      responsive: true, displayModeBar: true, displaylogo: false, scrollZoom: true,
+      modeBarButtonsToRemove: ['sendDataToCloud', 'lasso2d', 'select2d'],
+    };
+    pairs.forEach(function (p) {
+      var fig = JSON.parse(p[1]);
+      var el  = document.getElementById(p[0]);
+      if (el) Plotly.react(el, fig.data, fig.layout, cfg);
+    });
+
+    document.getElementById('mesh-popup-loading').style.display = 'none';
+    document.getElementById('mesh-carousel-wrap').style.display = 'block';
+    _meshWindOn = false;
+    var wb = document.getElementById('mesh-wind-btn');
+    if (wb) wb.classList.remove('active');
+    meshGoTo(0);
+
+    if (data.meta) {
+      var airTag = (data.wind_grid && data.wind_grid.has_air) ? ' | air-corrected wind' : '';
+      _dbg('Mesh: ' + data.meta.n_pts + ' pts | ' + (data.meta.n_mesh||'?') +
+           ' mesh pts | VEX ' + data.meta.vex + 'x  dem=' +
+           data.meta.dem_shape[0] + 'x' + data.meta.dem_shape[1] + airTag, '#a6adc8');
+    }
+    setStatus('3D plots ready — drag to rotate, scroll to zoom.', 'ok');
+  }
+
+  // ── E. Wind arrows toggle ─────────────────────────────────────────────────
+  function toggleMeshWind() {
+    if (!_meshWindGrid) return;
+    _meshWindOn = !_meshWindOn;
+    var btn = document.getElementById('mesh-wind-btn');
+    if (btn) btn.classList.toggle('active', _meshWindOn);
+    if (_meshWindOn) {
+      var speed  = parseFloat(document.getElementById('wind-speed').value) || 5;
+      var dirDeg = parseFloat(document.getElementById('wind-dir').value)   || 330;
+      var dirRad = dirDeg * Math.PI / 180;
+      var u = -Math.sin(dirRad);   // meteorological "from" convention → eastward
+      var v = -Math.cos(dirRad);   // northward
+      _drawWindArrows(u, v, speed);
+    } else {
+      _eraseWindArrows();
+    }
+  }
+
+  function _drawWindArrows(u_uni, v_uni, speed) {
+    var g    = _meshWindGrid;
+    var xs   = g.xs, ys = g.ys;
+    // Estimate grid span from the arrow xs/ys extents
+    var minX = xs.reduce(function(a,b){return Math.min(a,b);}),
+        maxX = xs.reduce(function(a,b){return Math.max(a,b);}),
+        minY = ys.reduce(function(a,b){return Math.min(a,b);}),
+        maxY = ys.reduce(function(a,b){return Math.max(a,b);});
+    var span    = Math.max(maxX - minX, maxY - minY) || 1000;
+    var refSpd  = 5;                         // speed (m/s) that fills 9% of span
+    var alenRef = span * 0.09;
+
+    // 2D quiver (slide 0) and cone data (slides 1 & 2)
+    var ax = [], ay = [], cx = [], cy = [], cz1 = [], cz2 = [], nu = [], nv = [];
+
+    // Offset cones above terrain surface so they're always visible
+    var coneOffsetReal = alenRef * 0.06;          // ~6% of scene span in real metres
+    var coneOffsetVex  = coneOffsetReal * (g.vex || 1);  // same offset in VEX space
+
+    for (var i = 0; i < xs.length; i++) {
+      var ui, vi, alen;
+      if (g.has_air && g.us && g.vs) {
+        ui = g.us[i]; vi = g.vs[i];
+        var mag = Math.sqrt(ui*ui + vi*vi) || 0.001;
+        alen = alenRef * Math.min(mag / refSpd, 2.5);
+        var scale2d = alen / mag;
+        ax.push(xs[i], xs[i] + ui * scale2d, null);
+        ay.push(ys[i], ys[i] + vi * scale2d, null);
+      } else {
+        alen = alenRef * Math.min(speed / refSpd, 2.5);
+        ax.push(xs[i], xs[i] + u_uni * alen, null);
+        ay.push(ys[i], ys[i] + v_uni * alen, null);
+        ui = u_uni * speed; vi = v_uni * speed;
+      }
+      cx.push(xs[i]); cy.push(ys[i]);
+      // Place cone tails on terrain surface + small offset
+      cz1.push((g.zs_real ? g.zs_real[i] : g.dem_mean) + coneOffsetReal);
+      cz2.push((g.zs_vex  ? g.zs_vex[i]  : 0          ) + coneOffsetVex);
+      nu.push(ui); nv.push(vi);
+    }
+
+    // 2D quiver: line segments + dot markers at arrow tips for arrowhead effect
+    var tipX = [], tipY = [];
+    for (var j = 0; j < ax.length; j += 3) {
+      if (ax[j+1] != null) { tipX.push(ax[j+1]); tipY.push(ay[j+1]); }
+    }
+    Plotly.addTraces('mesh-plot-0', [
+      { type: 'scatter', mode: 'lines', x: ax, y: ay,
+        line: { color: '#89dceb', width: 1.6 },
+        hoverinfo: 'none', showlegend: false, name: '__wind__' },
+      { type: 'scatter', mode: 'markers', x: tipX, y: tipY,
+        marker: { symbol: 'circle', size: 4, color: '#89dceb' },
+        hoverinfo: 'none', showlegend: false, name: '__wind__' },
+    ]);
+
+    var sizeref = span * 0.045;
+    var baseCone = {
+      type: 'cone', x: cx, y: cy, u: nu, v: nv, w: Array(cx.length).fill(0),
+      colorscale: [[0, '#89b4fa'], [1, '#89dceb']], showscale: false,
+      sizemode: 'absolute', sizeref: sizeref, anchor: 'tail',
+      hoverinfo: 'none', showlegend: false, name: '__wind__',
+    };
+    Plotly.addTraces('mesh-plot-1', Object.assign({}, baseCone, { z: cz1 }));
+    Plotly.addTraces('mesh-plot-2', Object.assign({}, baseCone, { z: cz2 }));
+  }
+
+  function _eraseWindArrows() {
+    ['mesh-plot-0', 'mesh-plot-1', 'mesh-plot-2'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el || !el.data) return;
+      var rem = [];
+      el.data.forEach(function (tr, i) { if (tr.name === '__wind__') rem.unshift(i); });
+      if (rem.length) Plotly.deleteTraces(el, rem);
+    });
+  }
+
+  // ── Close popup ────────────────────────────────────────────────────────────
+  function closeMeshPopup() {
+    var popup = document.getElementById('mesh-popup');
+    if (popup) popup.classList.remove('visible');
+    ['mesh-plot-0', 'mesh-plot-1', 'mesh-plot-2'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) { try { Plotly.purge(el); } catch (ex) {} }
+    });
+    _meshWindOn = false;
+    _meshCurrentSlide = 0;
+  }
+
+  // ── Yellow "3D" pin marker ─────────────────────────────────────────────────
+  // position:fixed on document.body — completely outside the map's DOM so MapLibre
+  // can never touch this element.  We convert geographic → viewport coords manually:
+  //   mapRect.left + map.project([lon,lat]).x  = viewport X of the geographic point.
+  // mousedown stops propagation so MapLibre never starts a pan gesture from the pin.
+  function _add3dPin(lat, lon) {
+    var el = document.createElement('div');
+    el.style.cssText = [
+      'position:fixed; z-index:9999;',
+      'width:30px; height:30px; border-radius:50%;',
+      'background: radial-gradient(circle at 38% 38%, #ffe569, #f5c200);',
+      'border: 2px solid rgba(255,245,100,0.70);',
+      'display:flex; align-items:center; justify-content:center;',
+      'font-size:8.5px; font-weight:800; color:#1e1e2e; letter-spacing:0.04em;',
+      'cursor:pointer;',
+      'box-shadow: 0 2px 8px rgba(249,220,47,0.55), 0 0 14px rgba(249,220,47,0.22);',
+      'user-select:none; transition:transform 0.12s;',
+    ].join('');
+    el.textContent = '3D';
+    el.title = 'Ctrl+click pin — click to reopen 3D mesh';
+
+    el.addEventListener('mouseenter', function () { el.style.transform = 'scale(1.18)'; });
+    el.addEventListener('mouseleave', function () { el.style.transform = '';            });
+    // Block mousedown so MapLibre never interprets pressing the pin as a pan gesture
+    el.addEventListener('mousedown',  function (ev) { ev.stopPropagation(); ev.preventDefault(); });
+    el.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      var r = el.getBoundingClientRect();
+      openMeshPopup(lat, lon, r.left + 15, r.top + 15);
+    });
+
+    function reposition() {
+      var mapRect = map.getContainer().getBoundingClientRect();
+      var pt      = map.project([lon, lat]);
+      el.style.left = (mapRect.left + pt.x - 15) + 'px';
+      el.style.top  = (mapRect.top  + pt.y - 15) + 'px';
+    }
+
+    document.body.appendChild(el);
+    reposition();
+
+    map.on('move',   reposition);
+    map.on('zoom',   reposition);
+    map.on('rotate', reposition);
+    map.on('pitch',  reposition);
+    map.on('resize', reposition);
+
+    _3dPinMarkers.push({ el: el, reposition: reposition, lat: lat, lon: lon });
+  }
+
+  // A. Ctrl + Left-click — intercept before MapLibre sees the event.
+  // stopImmediatePropagation: prevents MapLibre's Ctrl+drag rotate gesture (bug-b).
+  // The 'click' guard in onMapClick handles the residual click event (bug-a).
+  map.getCanvas().addEventListener('mousedown', function (e) {
+    if (!(e.button === 0 && e.ctrlKey)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();    // block MapLibre rotate gesture
+    var rect  = map.getCanvas().getBoundingClientRect();
+    var point = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+    _add3dPin(point.lat, point.lng);
+    openMeshPopup(point.lat, point.lng, e.clientX, e.clientY);
+  }, { capture: true });
   </script>
 </body>
 </html>

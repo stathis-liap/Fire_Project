@@ -4,6 +4,8 @@
 
 A drone-assisted wildfire digital twin for the Mediterranean. WILSON ingests real satellite fire detections, 30-metre terrain (Copernicus COP30), ERA5 hourly weather, CORINE land cover and FIRED historical perimeters, then runs a physics-based Rothermel Cellular Automata model calibrated against the ground-truth perimeter using Differential Evolution. The result is a data-assimilated hindcast you can replay in 2-D or a full 3-D satellite-textured PyVista terrain mesh.
 
+> New 3D computational-geometry features are documented in `3D_README.md` and a short quick-start guide is available in `README_3D.md`.
+
 ---
 
 ## Table of Contents

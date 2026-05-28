@@ -190,11 +190,73 @@ q_y = (qI * disp_cell).ravel()
 q_z = zz[qI, qJ].ravel() + 80.0
 q_u = wu_disp[qI, qJ].ravel()
 q_v = wv_disp[qI, qJ].ravel()
+
+# ── 3D Wind Component (Vertical): Optional if provided in NPZ ─────────────────
+# If wind_w is in the payload, use it for full 3D visualization.
+# Otherwise, compute it from terrain slope (simplified model).
+if "wind_w" in data:
+    w_loaded = data["wind_w"]
+    if w_loaded.ndim == 0:
+        w_loaded = np.full_like(elevation, float(w_loaded))
+    if SCALE > 1:
+        from scipy.ndimage import zoom as _zoom
+        w_disp = _zoom(w_loaded, SCALE, order=1)
+    else:
+        w_disp = w_loaded
+    q_w = w_disp[qI, qJ].ravel()
+    print(f"[3D] Loaded wind_w from NPZ  (min={q_w.min():.2f}, max={q_w.max():.2f} m/s)")
+else:
+    # Fallback: estimate w from terrain slope + horizontal wind
+    # w ≈ |U_horiz| * sin(slope_angle)
+    grad_y, grad_x = np.gradient(elevation, cell_size_m, cell_size_m)
+    slope_mag = np.sqrt(grad_x**2 + grad_y**2)
+    slope_angle = np.arctan(slope_mag)
+    u_horiz = np.sqrt(wu**2 + wv**2)
+    w_est = u_horiz * np.sin(slope_angle)
+    if SCALE > 1:
+        from scipy.ndimage import zoom as _zoom_w
+        w_disp = _zoom_w(w_est, SCALE, order=1)
+    else:
+        w_disp = w_est
+    q_w = w_disp[qI, qJ].ravel()
+    print(f"[3D] Computed wind_w from terrain slope  (min={q_w.min():.2f}, max={q_w.max():.2f} m/s)")
+
+# Build 3D wind vector field
 vec_pts = np.column_stack((q_x, q_y, q_z))
-vec_dir = np.column_stack((q_u, q_v, np.zeros_like(q_u)))
+vec_dir = np.column_stack((q_u, q_v, q_w))
+vec_mag = np.linalg.norm(vec_dir, axis=1)
+
+# 3D wind cloud with magnitude-based colouring
 wind_cloud = pv.PolyData(vec_pts)
-wind_cloud["wind"] = vec_dir
-arrows = wind_cloud.glyph(orient="wind", factor=disp_cell * 3, scale=True)
+wind_cloud["wind_vectors"] = vec_dir
+wind_cloud["wind_magnitude"] = vec_mag
+
+
+# Colour cones by vertical component (blue=down, cyan=neutral, magenta=up)
+cone_w_component = np.zeros(len(vec_dir), dtype=np.float32)
+for i in range(len(vec_dir)):
+    w_mag = np.linalg.norm(vec_dir[i])
+    if w_mag > 0.1:
+        cone_w_component[i] = q_w[i] / (w_mag + 1e-6)
+
+wind_cloud["vertical"] = cone_w_component
+
+arrows = wind_cloud.glyph(
+    orient="wind_vectors",
+    factor=disp_cell * 2,
+    scale="wind_magnitude",
+)
+
+repeat_count = arrows.n_points // len(cone_w_component)
+if arrows.n_points % len(cone_w_component) == 0:
+    arrows.point_data["vertical"] = np.repeat(cone_w_component, repeat_count)
+else:
+    repeat_counts = np.full(len(cone_w_component), repeat_count, dtype=int)
+    extra = arrows.n_points - repeat_count * len(cone_w_component)
+    repeat_counts[:extra] += 1
+    arrows.point_data["vertical"] = np.repeat(cone_w_component, repeat_counts)
+
+print(f"[3D] Wind field: {len(q_x)} vectors  |  wind range: {vec_mag.min():.1f}–{vec_mag.max():.1f} m/s")
 
 # ── Ignition stars (all seeds — supports multi-fire events) ──────────────────
 # Build PolyData objects now; add to plotter after pl is created (below).
@@ -228,7 +290,15 @@ pl.add_mesh(fuel_mesh, scalars="fuel_rgba", rgba=True, show_scalar_bar=False,
 
 pl.add_mesh(fire_mesh, scalars="fire_rgba", rgba=True, show_scalar_bar=False,
             name="fire", lighting=False)
-pl.add_mesh(arrows, color="cyan", opacity=0.7, name="wind")
+
+# 3D Wind visualization: Cones colored by vertical component
+# Blue = downdraft, Cyan = neutral horizontal, Magenta = updraft
+pl.add_mesh(arrows, scalars="vertical", cmap="coolwarm", opacity=0.8, 
+            show_scalar_bar=False, name="wind_3d", lighting=False)
+
+# Wind legend (text annotation)
+pl.add_text("[CYAN] = Horizontal wind  |  [BLUE] = Downdraft  |  [RED] = Updraft",
+            position="upper_left", font_size=10, color="cyan")
 
 # Add all ignition seed markers (built before pl was created)
 _star_points = np.array([[_sx, _sy, _sz] for _, _, _sx, _sy, _sz in _ign_star_meshes])

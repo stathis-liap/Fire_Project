@@ -287,3 +287,116 @@ def compute_wind_field(
     wind_v_grid: np.ndarray = V - dphi_dy
 
     return wind_u_grid, wind_v_grid
+
+
+# ---------------------------------------------------------------------------
+# 3D Wind Field — Vertical Component
+# ---------------------------------------------------------------------------
+
+def compute_vertical_wind(
+    landscape,
+    wind_u_grid: np.ndarray,
+    wind_v_grid: np.ndarray,
+    fire_mask: np.ndarray = None,
+) -> np.ndarray:
+    """
+    Compute the vertical wind component (w) for 3D visualization.
+
+    Physics
+    -------
+    Vertical wind arises from:
+
+      1. Anabatic/Katabatic Flow
+         On slopes: w = U_horizontal · sin(slope_angle)
+         Wind blowing up a slope → positive w (updraft)
+
+      2. Thermal Updraft (Fire-Induced Buoyancy)
+         Over burning cells, convective heating drives strong updraft
+         w_thermal ≈ k_thermal · |U_horizontal| (where fire_mask == 1)
+
+      3. Divergence Compensation
+         ∇·(U, V, W) = 0 → vertical motion balances horizontal divergence
+         W_compensate ≈ −z · (∂U/∂x + ∂V/∂y)
+
+    Parameters
+    ----------
+    landscape : Landscape object with .elevation, .shape
+    wind_u_grid : (rows, cols) horizontal wind East–West (m/s)
+    wind_v_grid : (rows, cols) horizontal wind North–South (m/s)
+    fire_mask : (rows, cols) optional bool; True = burning cells
+                If None, no thermal updraft is added.
+
+    Returns
+    -------
+    wind_w : (rows, cols) float32 vertical wind (m/s)
+             Positive = updraft, Negative = downdraft
+    """
+    rows, cols = landscape.shape
+    dx = dy = float(landscape.config.CELL_SIZE_METERS if hasattr(landscape, "config") else 5.0)
+
+    # Initialize vertical wind field
+    wind_w = np.zeros((rows, cols), dtype=np.float32)
+
+    # ── Component 1: Anabatic/Katabatic Flow from Terrain Slope ───────────
+    # On a slope, the horizontal wind has a component aligned with (up or down)
+    # the slope. This component "lifts" vertically.
+
+    elev = landscape.elevation.astype(np.float64)
+
+    # Terrain gradient
+    grad_y, grad_x = np.gradient(elev, dy, dx)  # dz/dy, dz/dx
+    slope_angle = np.arctan(np.hypot(grad_x, grad_y))
+
+    # Horizontal wind magnitude
+    wind_horiz_mag = np.hypot(wind_u_grid, wind_v_grid).astype(np.float64)
+
+    # Component of wind aligned with uphill direction
+    wind_unit_u = wind_u_grid / (wind_horiz_mag + 1e-9)
+    wind_unit_v = wind_v_grid / (wind_horiz_mag + 1e-9)
+
+    # Uphill direction (unit vector)
+    uphill_u = grad_x / (np.hypot(grad_x, grad_y) + 1e-9)
+    uphill_v = grad_y / (np.hypot(grad_x, grad_y) + 1e-9)
+
+    # Alignment: positive when wind blows uphill
+    alignment = wind_unit_u * uphill_u + wind_unit_v * uphill_v
+
+    # Vertical component from slope
+    wind_w += (wind_horiz_mag * np.sin(slope_angle) * alignment).astype(np.float32)
+
+    # ── Component 2: Thermal Updraft Over Fire ───────────────────────────────
+    # Burning cells heat air → strong convective updraft
+    # Empirical: thermal updraft ≈ 0.5 × local horizontal wind speed
+
+    if fire_mask is not None:
+        fire_mask = fire_mask.astype(bool)
+        # Gaussian kernel: thermal effect spreads to neighboring cells
+        # For now, directly add updraft over burning cells + small halo
+        from scipy.ndimage import binary_dilation
+
+        # Expand burning region by 2 cells (halo effect)
+        fire_halo = binary_dilation(fire_mask, iterations=2)
+        thermal_boost = np.zeros_like(wind_w)
+        thermal_boost[fire_halo] = 0.5 * wind_horiz_mag[fire_halo]
+        thermal_boost[fire_mask] = 0.8 * wind_horiz_mag[fire_mask]  # stronger at fire core
+
+        wind_w += thermal_boost.astype(np.float32)
+
+    # ── Component 3: Divergence Compensation ────────────────────────────────
+    # If horizontal wind field has divergence, vertical motion compensates
+    # (mass continuity: ∇·(U,V,W) = 0)
+
+    dU_dx = np.gradient(wind_u_grid.astype(np.float64), dx, axis=1)
+    dV_dy = np.gradient(wind_v_grid.astype(np.float64), dy, axis=0)
+    divergence_horiz = dU_dx + dV_dy
+
+    # Simple model: compensate divergence with downward motion
+    # (assumes typical boundary layer height ~ 500 m)
+    boundary_layer_height = 500.0  # metres
+    wind_w -= (divergence_horiz * boundary_layer_height).astype(np.float32)
+
+    # Clip to realistic values (±5 m/s max vertical velocity)
+    wind_w = np.clip(wind_w, -5.0, 5.0).astype(np.float32)
+
+    return wind_w
+

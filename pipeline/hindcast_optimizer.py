@@ -144,7 +144,7 @@ def fetch_firms_data(
                 lines = [l for l in resp.text.strip().split("\n") if l]
                 if len(lines) > 1:
                     chunk_texts.append(resp.text)
-                    print(f"[FIRMS] {source} → {len(lines)-1} rows")
+                    print(f"[FIRMS] {source} -> {len(lines)-1} rows")
                 else:
                     print(f"[FIRMS] {source} returned no rows for chunk {chunk_start}")
             except requests.exceptions.RequestException as exc:
@@ -269,7 +269,7 @@ def fetch_weather_hourly(lat: float, lon: float,
     url = _OPEN_METEO_HISTORICAL_URL.format(
         lat=lat, lon=lon, date_start=date_start, date_end=date_end
     )
-    print(f"[WEATHER] Fetching ERA5 hourly ({date_start} → {date_end}) from Open-Meteo …")
+    print(f"[WEATHER] Fetching ERA5 hourly ({date_start} -> {date_end}) from Open-Meteo ...")
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
     h = resp.json().get("hourly", {})
@@ -422,7 +422,7 @@ def apply_weather_to_landscape(landscape: Landscape, weather: dict) -> None:
     print(
         f"[LANDSCAPE] Updated: EMC={real_emc:.4f}  "
         f"wind={weather['wind_speed_ms']:.2f} m/s  "
-        f"FROM {weather['wind_direction']:.0f}° → pushes toward {push_direction:.0f}°"
+        f"FROM {weather['wind_direction']:.0f}deg -> pushes toward {push_direction:.0f}deg"
     )
 
 
@@ -531,7 +531,7 @@ def dilate_truth_mask(truth_mask: np.ndarray, cell_size_m: float,
     dilated = binary_dilation(truth_mask, structure=struct)
     n_raw  = int(truth_mask.sum())
     n_dil  = int(dilated.sum())
-    print(f"  [TruthMask] Dilated {n_raw} VIIRS pixels → {n_dil} cells "
+    print(f"  [TruthMask] Dilated {n_raw} VIIRS pixels -> {n_dil} cells "
           f"(radius={radius_cells} cells @ {cell_size_m:.0f} m/cell)")
     return dilated
 
@@ -610,7 +610,7 @@ def load_copernicus_truth_mask(
     ).astype(bool)
 
     n_cells = int(mask.sum())
-    print(f"  [Copernicus] Rasterised → {n_cells} cells inside fire perimeter  "
+    print(f"  [Copernicus] Rasterised -> {n_cells} cells inside fire perimeter  "
           f"({n_cells * (((lat_max-lat_min)/rows) * 111000)**2 / 10_000:.1f} ha approx)")
     return mask
 
@@ -1381,8 +1381,8 @@ def run_hindcast(
     dt_fine              = OPT_DT * (fine_cell_m / coarse_cell_m)
     hindcast_steps_fine  = max(1, int(hindcast_minutes / dt_fine))
     print(f"  [Resolution] coarse_cell={coarse_cell_m:.0f} m  fine_cell={fine_cell_m:.0f} m")
-    print(f"  [dt scaling] OPT_DT={OPT_DT:.3f} min → dt_fine={dt_fine:.4f} min  "
-          f"({hindcast_steps} coarse steps → {hindcast_steps_fine} fine steps)")
+    print(f"  [dt scaling] OPT_DT={OPT_DT:.3f} min -> dt_fine={dt_fine:.4f} min  "
+          f"({hindcast_steps} coarse steps -> {hindcast_steps_fine} fine steps)")
     print(f"  [Wind]       wind_mult unchanged at {best_wind_mult:.3f}× "
           f"(Rothermel physics fully preserved)")
 
@@ -1472,7 +1472,7 @@ def run_hindcast(
     print(f"  Predicted cells   : {int(final_mask.sum())}")
     print()
     print(f"  Optimal moisture offset : {best_moisture_offset:+.4f}")
-    print(f"    → Effective midflame moisture ≈ "
+    print(f"    -> Effective midflame moisture ~= "
           f"{float(optimizer.base_moisture.mean()) + best_moisture_offset:.3f}")
     print(f"  Optimal wind multiplier : {best_wind_mult:.3f}x  "
           f"(applied unchanged on fine grid — Rothermel physics preserved)")

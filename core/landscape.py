@@ -464,3 +464,71 @@ class Landscape:
         if fuel_name in ("Non_Combustible", "Water", "Urban_Fabric", "Urban_Road"):
             return {}
         return GREEK_FUELS[fuel_name]
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 3D Spatial Indexing (KD-Tree) — for firefighter deployment & routing
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def build_spatial_index(self):
+        """
+        Build KD-Tree spatial index of all terrain cells (3D: x, y, z coordinates).
+        Enables fast nearest-neighbor queries for evacuation routing, firefighter
+        deployment planning, and multi-fire analysis.
+
+        Internally caches the tree; call this once after loading terrain.
+        """
+        rows, cols = self.shape
+        cell_m = self.config.CELL_SIZE_METERS if hasattr(self.config, 'CELL_SIZE_METERS') else 5.0
+
+        # Build 3D point cloud: (x_m, y_m, z_m)
+        yy, xx = np.meshgrid(np.arange(cols), np.arange(rows), indexing='ij')
+        xx_m = xx * cell_m
+        yy_m = yy * cell_m
+        zz_m = self.elevation
+
+        self._spatial_points = np.column_stack([xx_m.ravel(), yy_m.ravel(), zz_m.ravel()])
+        self._spatial_tree = KDTree(self._spatial_points)
+        print(f"[Landscape] Built KD-Tree spatial index: {len(self._spatial_points)} points")
+
+    def query_nearest_terrain(self, point_xyz: np.ndarray, k: int = 1) -> tuple:
+        """
+        Query k nearest terrain neighbors to a 3D point.
+
+        Parameters
+        ----------
+        point_xyz : (3,) query point in metres (x, y, z)
+        k : number of nearest neighbors to return
+
+        Returns
+        -------
+        distances : (k,) distances in metres
+        indices : (k,) flattened terrain cell indices
+        """
+        if not hasattr(self, '_spatial_tree'):
+            self.build_spatial_index()
+        distances, indices = self._spatial_tree.query([point_xyz], k=k)
+        return distances[0], indices[0]
+
+    def query_terrain_radius(self, center_xyz: np.ndarray, radius_m: float) -> tuple:
+        """
+        Find all terrain points within radius of center point.
+        Useful for: evacuation zone definition, firefighter staging area analysis.
+
+        Parameters
+        ----------
+        center_xyz : (3,) center point in metres (x, y, z)
+        radius_m : search radius in metres
+
+        Returns
+        -------
+        indices : list of terrain cell indices within radius
+        distances : (k,) distances to each point
+        """
+        if not hasattr(self, '_spatial_tree'):
+            self.build_spatial_index()
+        indices = self._spatial_tree.query_ball_point(center_xyz, r=radius_m)
+        if indices:
+            distances = np.linalg.norm(self._spatial_points[indices] - center_xyz, axis=1)
+            return indices, distances
+        return [], np.array([])
+

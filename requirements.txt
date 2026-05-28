@@ -1,0 +1,8 @@
+numpy
+scipy
+pyvista
+pillow
+matplotlib
+websockets
+Flask
+flask-cors
