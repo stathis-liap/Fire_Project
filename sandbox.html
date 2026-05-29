@@ -91,6 +91,71 @@
     #mode-toggle button.active-ignite    { background: #f38ba8; border-color: #f38ba8; color: #1e1e2e; font-weight: 600; }
     #mode-toggle button.active-firebreak { background: #fab387; border-color: #fab387; color: #1e1e2e; font-weight: 600; }
     #mode-toggle button.active-water     { background: #89dceb; border-color: #89dceb; color: #1e1e2e; font-weight: 600; }
+    #mode-toggle button.active-mask      { background: #a6e3a1; border-color: #a6e3a1; color: #1e1e2e; font-weight: 600; }
+    .map-cursor-mask { cursor: crosshair; }
+
+    /* ── Optimizer section ───────────────────────────────────────────────── */
+    .opt-row { display:flex; gap:6px; align-items:center; margin-bottom:4px; }
+    .opt-row label { flex:1; font-size:11px; color:#a6adc8; }
+    .opt-row input[type="number"] { width:54px; background:#313244; border:1px solid #45475a;
+      color:#cdd6f4; border-radius:4px; padding:2px 5px; font-size:11px; }
+    #btn-close-mask { background:#a6e3a1; color:#1e1e2e; display:none; margin-bottom:4px; }
+    #btn-clear-mask { background:#313244; color:#a6adc8; display:none; margin-bottom:6px; }
+    #btn-run-opt    { background: linear-gradient(135deg,#89b4fa,#cba6f7);
+                      color:#1e1e2e; font-weight:700; letter-spacing:0.5px; }
+    #btn-run-opt:disabled { opacity:0.4; cursor:not-allowed; }
+    #opt-result-box { margin-top:6px; padding:6px 8px; background:#181825;
+                      border-radius:6px; font-size:11px; color:#a6e3a1;
+                      display:none; line-height:1.6; }
+
+    /* ── Optimizer progress modal ────────────────────────────────────────── */
+    #opt-modal {
+      display: none;
+      position: fixed; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 9000;
+      background: #1e1e2e;
+      border: 1px solid #45475a;
+      border-radius: 12px;
+      padding: 20px 24px;
+      min-width: 320px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+    }
+    #opt-modal.visible { display: block; }
+    #opt-modal-title {
+      font-size: 14px; font-weight: 700; color: #cdd6f4;
+      margin-bottom: 14px; text-align: center;
+    }
+    #opt-modal-title .opt-spin {
+      display: inline-block;
+      animation: opt-spin 1.2s linear infinite;
+    }
+    @keyframes opt-spin { to { transform: rotate(360deg); } }
+    #opt-progress-track {
+      background: #313244; border-radius: 99px; height: 10px;
+      overflow: hidden; margin-bottom: 10px;
+    }
+    #opt-progress-fill {
+      height: 100%; border-radius: 99px; width: 0%;
+      background: linear-gradient(90deg, #89b4fa, #a6e3a1, #f9e2af);
+      background-size: 200% 100%;
+      animation: opt-shimmer 1.8s ease-in-out infinite;
+      transition: width 0.3s ease;
+    }
+    @keyframes opt-shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .opt-stat-row { display:flex; justify-content:space-between;
+                    font-size:11px; color:#a6adc8; margin-bottom:4px; }
+    .opt-stat-row b { color:#cdd6f4; }
+    #opt-modal-iou { font-size:22px; font-weight:800; text-align:center;
+                     color:#a6e3a1; margin:8px 0 4px; }
+    #opt-modal-btn { display:block; width:100%; margin-top:12px; padding:6px;
+                     background:#313244; border:1px solid #45475a;
+                     color:#a6adc8; border-radius:6px; cursor:pointer;
+                     font-size:11px; }
+    #opt-modal-btn:hover { background:#45475a; color:#cdd6f4; }
 
     /* ── Ignition list ───────────────────────────────────────────────────── */
     #ign-list {
@@ -503,8 +568,11 @@
       <button id="btn-ignite"    class="active-ignite" onclick="setMode('ignite')">🔥 Ignite</button>
       <button id="btn-firebreak" onclick="setMode('firebreak')">🪓 Break</button>
       <button id="btn-water"     onclick="setMode('water')">💧 Water</button>
+      <button id="btn-mask"      onclick="setMode('mask')">🎯 Mask</button>
     </div>
-    <button class="btn" id="btn-apply-fb" onclick="applyFirebreak()">Apply Firebreak</button>
+    <button class="btn" id="btn-apply-fb"    onclick="applyFirebreak()">Apply Firebreak</button>
+    <button class="btn" id="btn-close-mask"  onclick="closeMaskPolygon()">✔ Close Polygon</button>
+    <button class="btn" id="btn-clear-mask"  onclick="clearMask()">✕ Clear Mask</button>
 
     <div class="sect-label">Ignition Points (<span id="ign-count">0</span>)</div>
     <div id="ign-list">None yet — click the map in Ignite mode.</div>
@@ -521,6 +589,28 @@
     </div>
 
     <button class="btn" id="btn-clear" onclick="clearAll()">🗑 Clear All</button>
+
+    <div class="sect-label" style="margin-top:10px">🔬 Optimizer</div>
+    <div style="font-size:10px;color:#585b70;margin-bottom:6px;line-height:1.4">
+      Draw a 🎯 Mask (ground-truth perimeter), enter fire age, place 🔥 ignition points, then run.
+    </div>
+    <div class="opt-row" id="opt-elapsed-row" style="display:none">
+      <label>Fire age at mask</label>
+      <input type="number" id="opt-elapsed-h" value="6"  min="0" max="168" step="1"
+             title="Hours since ignition" style="width:42px"/> h
+      <input type="number" id="opt-elapsed-m" value="0" min="0" max="59"  step="5"
+             title="Minutes" style="width:38px"/> m
+    </div>
+    <div class="opt-row">
+      <label>Particles</label>
+      <input type="number" id="opt-particles" value="20" min="4" max="100" step="1"/>
+    </div>
+    <div class="opt-row">
+      <label>Iterations</label>
+      <input type="number" id="opt-iterations" value="12" min="3" max="50" step="1"/>
+    </div>
+    <button class="btn" id="btn-run-opt" onclick="runOptimizer()" disabled>🔬 Run Optimizer</button>
+    <div id="opt-result-box"></div>
 
     <div id="status" class="info">Click the map to place ignition points.</div>
     <div id="stats">
@@ -561,6 +651,9 @@
     var SRC_FIREBREAK   = "firebreak-src";
     var SRC_WATER       = "water-src";
     var SRC_VEGETATION  = "vegetation-src";
+    var SRC_MASK        = "truth-mask-src";
+    var SRC_MASK_PREV   = "truth-mask-preview-src";
+    var SRC_ENSEMBLE    = "ensemble-src";
     var TILE_URL        = "https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}.jpg?api_key=42d95708-abc1-48a0-882c-c13e72274056";
     var WS_URL          = "ws://localhost:8765";
     var _activeMapTab   = "satellite";
@@ -597,6 +690,12 @@
     var _windRows         = 20;
     var _windCols         = 20;
     var _windParticles    = [];
+    // ── Optimizer / mask state ────────────────────────────────────────────────
+    var maskPoints        = [];    // [lng, lat] vertices while drawing
+    var maskCommitted     = false; // true once polygon is closed
+    var _optimizerRunning = false;
+    var _ensembleVisible  = false;
+    var wsOpt             = null;  // separate WebSocket for the optimizer session
     window._simHistory    = null;
 
     // ── Utility ───────────────────────────────────────────────────────────────
@@ -723,6 +822,31 @@
       map.addLayer({
         id: "water-outline", type: "line", source: SRC_WATER,
         paint: { "line-color": "#89dceb", "line-width": 1.5 },
+      });
+
+      // ── Ground-truth mask layers ──────────────────────────────────────────
+      map.addSource(SRC_MASK,      { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_MASK_PREV, { type: "geojson", data: emptyFC() });
+
+      map.addLayer({
+        id: "mask-fill", type: "fill", source: SRC_MASK,
+        paint: { "fill-color": "#a6e3a1", "fill-opacity": 0.18 },
+      });
+      map.addLayer({
+        id: "mask-outline", type: "line", source: SRC_MASK,
+        paint: { "line-color": "#a6e3a1", "line-width": 2.5, "line-dasharray": [4, 2] },
+      });
+      map.addLayer({
+        id: "mask-preview-line", type: "line", source: SRC_MASK_PREV,
+        filter: ["==", "$type", "LineString"],
+        paint: { "line-color": "#a6e3a1", "line-width": 1.5,
+                 "line-dasharray": [3, 3], "line-opacity": 0.75 },
+      });
+      map.addLayer({
+        id: "mask-preview-dots", type: "circle", source: SRC_MASK_PREV,
+        filter: ["==", "$type", "Point"],
+        paint: { "circle-radius": 4, "circle-color": "#a6e3a1",
+                 "circle-stroke-width": 1.5, "circle-stroke-color": "#1e1e2e" },
       });
 
       map.on("click", onMapClick);
@@ -1268,21 +1392,38 @@
     // ── Drawing modes ─────────────────────────────────────────────────────────
     function setMode(m) {
       mode = m;
-      ["btn-ignite", "btn-firebreak", "btn-water"].forEach(function (id) {
-        document.getElementById(id).className = "";
+      ["btn-ignite", "btn-firebreak", "btn-water", "btn-mask"].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.className = "";
       });
       if (m === "ignite")    document.getElementById("btn-ignite").className    = "active-ignite";
       if (m === "firebreak") document.getElementById("btn-firebreak").className = "active-firebreak";
       if (m === "water")     document.getElementById("btn-water").className     = "active-water";
+      if (m === "mask")      document.getElementById("btn-mask").className      = "active-mask";
 
       var canvas = map.getCanvas();
-      canvas.classList.remove("map-cursor-ignite", "map-cursor-firebreak", "map-cursor-water");
+      canvas.classList.remove("map-cursor-ignite", "map-cursor-firebreak",
+                              "map-cursor-water", "map-cursor-mask");
       if (m === "ignite")    canvas.classList.add("map-cursor-ignite");
       if (m === "firebreak") canvas.classList.add("map-cursor-firebreak");
       if (m === "water")     canvas.classList.add("map-cursor-water");
+      if (m === "mask")      canvas.classList.add("map-cursor-mask");
 
-      document.getElementById("btn-apply-fb").style.display = (m === "firebreak") ? "block" : "none";
+      document.getElementById("btn-apply-fb").style.display =
+        (m === "firebreak") ? "block" : "none";
       if (m !== "firebreak" && firebreakPoints.length > 1) commitFirebreak();
+
+      // Mask mode status hint
+      if (m === "mask" && !maskCommitted) {
+        setStatus("Click to add polygon vertices. Click 'Close Polygon' to finish.", "info");
+        document.getElementById("btn-close-mask").style.display = "block";
+        document.getElementById("btn-clear-mask").style.display =
+          maskPoints.length > 0 ? "block" : "none";
+      } else {
+        document.getElementById("btn-close-mask").style.display = "none";
+        document.getElementById("btn-clear-mask").style.display =
+          maskCommitted ? "block" : "none";
+      }
     }
 
     function onMapClick(e) {
@@ -1306,6 +1447,12 @@
           ws.send(JSON.stringify({ type: "intervention", intervention_type: "water_drop",
                                    lat: lat, lon: lng, radius_m: dropRadiusM }));
         }
+      } else if (mode === "mask") {
+        if (maskCommitted) return; // polygon already closed
+        maskPoints.push([lng, lat]);
+        redrawMaskPreview();
+        document.getElementById("btn-clear-mask").style.display = "block";
+        setStatus("Mask vertex " + maskPoints.length + " added. Click 'Close Polygon' when done.", "info");
       }
     }
 
@@ -1381,6 +1528,291 @@
       waterDrops.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: {} });
       if (map.getSource(SRC_WATER)) {
         map.getSource(SRC_WATER).setData({ type: "FeatureCollection", features: waterDrops });
+      }
+    }
+
+    // ── Ground-truth mask drawing ─────────────────────────────────────────────
+
+    function redrawMaskPreview() {
+      if (!map.getSource(SRC_MASK_PREV)) return;
+      var features = [];
+      if (maskPoints.length >= 2) {
+        features.push({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: maskPoints.slice() },
+          properties: {},
+        });
+      }
+      if (maskPoints.length > 0) {
+        // Dot markers for vertices
+        maskPoints.forEach(function (pt) {
+          features.push({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: pt },
+            properties: {},
+          });
+        });
+      }
+      map.getSource(SRC_MASK_PREV).setData({ type: "FeatureCollection", features: features });
+    }
+
+    function closeMaskPolygon() {
+      if (maskPoints.length < 3) {
+        setStatus("Need at least 3 points to close a polygon.", "err");
+        return;
+      }
+      maskCommitted = true;
+      // Close ring
+      var ring = maskPoints.slice();
+      ring.push(ring[0]);
+      var poly = {
+        type: "FeatureCollection",
+        features: [{
+          type: "Feature",
+          geometry: { type: "Polygon", coordinates: [ring] },
+          properties: {},
+        }],
+      };
+      if (map.getSource(SRC_MASK))     map.getSource(SRC_MASK).setData(poly);
+      // Clear the preview line
+      if (map.getSource(SRC_MASK_PREV))
+        map.getSource(SRC_MASK_PREV).setData({ type: "FeatureCollection", features: [] });
+
+      document.getElementById("btn-close-mask").style.display = "none";
+      document.getElementById("btn-clear-mask").style.display = "block";
+      document.getElementById("btn-run-opt").disabled = false;
+      document.getElementById("opt-elapsed-row").style.display = "flex";
+      setMode("ignite"); // switch back so user can place ignition points
+      setStatus("Mask closed (" + (ring.length - 1) + " vertices). Set fire age, place ignition points, then Run Optimizer.", "ok");
+    }
+
+    function clearMask() {
+      maskPoints    = [];
+      maskCommitted = false;
+      if (map.getSource(SRC_MASK))
+        map.getSource(SRC_MASK).setData({ type: "FeatureCollection", features: [] });
+      if (map.getSource(SRC_MASK_PREV))
+        map.getSource(SRC_MASK_PREV).setData({ type: "FeatureCollection", features: [] });
+      document.getElementById("btn-close-mask").style.display = "none";
+      document.getElementById("btn-clear-mask").style.display = "none";
+      document.getElementById("btn-run-opt").disabled = true;
+      document.getElementById("opt-elapsed-row").style.display = "none";
+      document.getElementById("opt-result-box").style.display = "none";
+      _clearEnsemble();
+      setStatus("Mask cleared.", "info");
+    }
+
+    function _clearEnsemble() {
+      if (_ensembleVisible && map.getLayer("ensemble-layer")) {
+        map.setLayoutProperty("ensemble-layer", "visibility", "none");
+      }
+      _ensembleVisible = false;
+    }
+
+    // ── Optimizer control ─────────────────────────────────────────────────────
+    // The optimizer runs on its own separate WebSocket connection
+    // (type "init_optimizer") so it NEVER interferes with the live simulation.
+
+    function runOptimizer() {
+      if (!maskCommitted) {
+        setStatus("Draw and close a ground-truth mask first.", "err");
+        return;
+      }
+      if (!ignitionPoints.length) {
+        setStatus("Place at least one ignition point first.", "err");
+        return;
+      }
+      if (_optimizerRunning) return;
+
+      // Study-area parameters (same calculation as runSimulation)
+      var lat_c = ignitionPoints.reduce(function(s,p){return s+p.lat;},0)/ignitionPoints.length;
+      var lon_c = ignitionPoints.reduce(function(s,p){return s+p.lng;},0)/ignitionPoints.length;
+      var half  = parseFloat(document.getElementById("bbox").value) || 0.125;
+
+      // Fire age at ground-truth mask
+      var elH   = parseInt(document.getElementById("opt-elapsed-h").value, 10) || 0;
+      var elM   = parseInt(document.getElementById("opt-elapsed-m").value, 10) || 0;
+      var elapsedHours = elH + elM / 60.0;
+      if (elapsedHours <= 0) elapsedHours = 6.0;
+
+      // Truth mask GeoJSON
+      var ring = maskPoints.slice(); ring.push(ring[0]);
+      var truthGeoJSON = {
+        type: "FeatureCollection",
+        features: [{ type: "Feature",
+                     geometry: { type: "Polygon", coordinates: [ring] },
+                     properties: {} }],
+      };
+
+      var nP = Math.max(4,  Math.min(100, parseInt(document.getElementById("opt-particles").value,  10) || 20));
+      var nI = Math.max(3,  Math.min(50,  parseInt(document.getElementById("opt-iterations").value, 10) || 12));
+
+      // Message to initialise an optimizer-only server session
+      var initOptMsg = {
+        type:              "init_optimizer",
+        lat_center:        lat_c,
+        lon_center:        lon_c,
+        bbox_degrees:      half,
+        ignition_points:   ignitionPoints.map(function(p){ return { lat:p.lat, lon:p.lng }; }),
+        wind_speed_ms:     parseFloat(document.getElementById("wind-speed").value)  || 5,
+        wind_dir_deg:      parseFloat(document.getElementById("wind-dir").value)    || 330,
+        temperature_c:     parseFloat(document.getElementById("temperature").value) || 35,
+        relative_humidity: parseFloat(document.getElementById("humidity").value)    || 25,
+      };
+
+      // Message to kick off the PSO run
+      var runOptMsg = {
+        type:               "run_optimizer",
+        truth_mask_geojson: truthGeoJSON,
+        elapsed_hours:      elapsedHours,
+        n_particles:        nP,
+        n_iterations:       nI,
+      };
+
+      _optimizerRunning = true;
+      document.getElementById("btn-run-opt").disabled = true;
+      _showOptModal(true, nP * nI);
+      setStatus("Connecting optimizer (separate session)…", "info");
+
+      // Close any stale optimizer connection
+      if (wsOpt) { wsOpt.close(); wsOpt = null; }
+
+      wsOpt = new WebSocket(WS_URL);
+      wsOpt.onopen = function() {
+        wsOpt.send(JSON.stringify(initOptMsg));
+      };
+      wsOpt.onmessage = function(ev) {
+        var msg;
+        try { msg = JSON.parse(ev.data); } catch(e) { return; }
+        if (msg.type === "init_optimizer_ack") {
+          // Server session is ready — fire the PSO command
+          wsOpt.send(JSON.stringify(runOptMsg));
+          setStatus("Optimizer running: " + nP + " particles × " + nI +
+                    " iters, fire age " + elH + "h " + elM + "m…", "info");
+        } else {
+          _handleOptMsg(msg);
+        }
+      };
+      wsOpt.onerror = function() {
+        setStatus("Optimizer connection error — is server.py running?", "err");
+        _dbg("wsOpt error", "#f38ba8");
+        _optimizerRunning = false;
+        document.getElementById("btn-run-opt").disabled = false;
+        _showOptModal(false, 0);
+      };
+      wsOpt.onclose = function() {
+        // Only reset if optimizer didn't finish normally
+        if (_optimizerRunning) {
+          _optimizerRunning = false;
+          document.getElementById("btn-run-opt").disabled = false;
+          _showOptModal(false, 0);
+          setStatus("Optimizer connection closed unexpectedly.", "err");
+        }
+        wsOpt = null;
+      };
+    }
+
+    function _handleOptMsg(msg) {
+      if (msg.type === "optimizer_progress") {
+        _updateOptProgress(msg);
+      } else if (msg.type === "optimizer_result") {
+        _showOptResult(msg);
+        // Close the optimizer WebSocket now that we have the result
+        if (wsOpt) { wsOpt.close(); wsOpt = null; }
+      } else if (msg.type === "optimizer_status") {
+        setStatus(msg.message, "info");
+        _dbg("Opt: " + msg.message, "#cba6f7");
+      } else if (msg.type === "error") {
+        setStatus("Optimizer error: " + msg.message, "err");
+        _dbg("Opt error: " + msg.message, "#f38ba8");
+        _optimizerRunning = false;
+        document.getElementById("btn-run-opt").disabled = false;
+        _showOptModal(false, 0);
+      }
+    }
+
+    function _showOptModal(show, totalEvals) {
+      var modal = document.getElementById("opt-modal");
+      if (show) {
+        // Read fire age from the inputs
+        var elH = parseInt(document.getElementById("opt-elapsed-h").value, 10) || 0;
+        var elM = parseInt(document.getElementById("opt-elapsed-m").value, 10) || 0;
+        modal.classList.add("visible");
+        document.getElementById("opt-progress-fill").style.width = "0%";
+        document.getElementById("opt-modal-age").textContent  = elH + "h " + elM + "m";
+        document.getElementById("opt-iter-val").textContent   = "—";
+        document.getElementById("opt-done-val").textContent   = "0 / " + (totalEvals || "?");
+        document.getElementById("opt-eta-val").textContent    = "calculating…";
+        document.getElementById("opt-modal-iou").textContent  = "IoU —";
+      } else {
+        modal.classList.remove("visible");
+      }
+    }
+
+    function _updateOptProgress(msg) {
+      var pct = msg.n_total > 0 ? Math.round(msg.n_done / msg.n_total * 100) : 0;
+      document.getElementById("opt-progress-fill").style.width = pct + "%";
+      // Estimate n_iterations from n_total / n_particles (particles = n_done/iteration)
+      var nIter = msg.n_total > 0 && msg.iteration > 0
+                  ? Math.round(msg.n_total / (msg.n_done / msg.iteration))
+                  : "?";
+      document.getElementById("opt-iter-val").textContent = msg.iteration + " / " + nIter;
+      document.getElementById("opt-done-val").textContent = msg.n_done + " / " + msg.n_total;
+      var iou = (msg.best_iou > 0) ? (msg.best_iou * 100).toFixed(1) + "%" : "—";
+      document.getElementById("opt-modal-iou").textContent = "Best IoU " + iou;
+      var eta = msg.eta_s;
+      document.getElementById("opt-eta-val").textContent =
+        eta > 60 ? Math.floor(eta / 60) + "m " + (eta % 60) + "s"
+                 : eta > 0 ? eta + "s" : "almost done…";
+    }
+
+    function _showOptResult(msg) {
+      _optimizerRunning = false;  // set before wsOpt.close() so onclose doesn't error-reset
+      document.getElementById("btn-run-opt").disabled = false;
+      _showOptModal(false, 0);
+
+      // Show best params
+      var p = msg.best_params || {};
+      var elH = parseInt(document.getElementById("opt-elapsed-h").value, 10) || 0;
+      var elM = parseInt(document.getElementById("opt-elapsed-m").value, 10) || 0;
+      var html = "<b>Best IoU: " + (msg.best_iou * 100).toFixed(1) + "%</b>"
+        + " · Matched at " + elH + "h " + elM + "m<br>"
+        + "<span style='color:#f9e2af'>Heatmap = +1 h forecast beyond mask</span><br>"
+        + "Wind ×" + (p.wind_multiplier || 1).toFixed(2)
+        + " · Moisture " + ((p.moisture_offset || 0) * 100).toFixed(1) + "%<br>"
+        + "Pine ×" + (p.ros_mult_pine   || 1).toFixed(2)
+        + " · Shrub ×" + (p.ros_mult_shrub  || 1).toFixed(2)
+        + " · Grass ×" + (p.ros_mult_grass  || 1).toFixed(2) + "<br>"
+        + "Forest ×" + (p.ros_mult_forest || 1).toFixed(2)
+        + " · Orchard ×" + (p.ros_mult_orchard || 1).toFixed(2);
+      var box = document.getElementById("opt-result-box");
+      box.innerHTML = html;
+      box.style.display = "block";
+
+      // Render ensemble heatmap as a MapLibre image layer
+      if (msg.heatmap_png_b64 && msg.lat_min !== undefined) {
+        var coords = [
+          [msg.lon_min, msg.lat_max],
+          [msg.lon_max, msg.lat_max],
+          [msg.lon_max, msg.lat_min],
+          [msg.lon_min, msg.lat_min],
+        ];
+        var imgUrl = "data:image/png;base64," + msg.heatmap_png_b64;
+        if (map.getSource(SRC_ENSEMBLE)) {
+          map.getSource(SRC_ENSEMBLE).updateImage({ url: imgUrl, coordinates: coords });
+          map.setLayoutProperty("ensemble-layer", "visibility", "visible");
+        } else {
+          map.addSource(SRC_ENSEMBLE, { type: "image", url: imgUrl, coordinates: coords });
+          map.addLayer({
+            id:    "ensemble-layer",
+            type:  "raster",
+            source: SRC_ENSEMBLE,
+            paint:  { "raster-opacity": 0.72 },
+          });
+        }
+        _ensembleVisible = true;
+        setStatus("Optimizer done — ensemble heatmap shown. Best IoU " +
+                  (msg.best_iou * 100).toFixed(1) + "%.", "ok");
       }
     }
 
@@ -1467,6 +1899,7 @@
 
       } else if (msg.type === "scrub_frame") {
         _updateScrubFrame(msg);
+
       }
     }
 
@@ -1623,6 +2056,23 @@
       _resetButtons();
       document.getElementById("speed-slider").value          = 1;
       document.getElementById("speed-val").textContent       = "1×";
+
+      // Close optimizer WebSocket and clear mask/ensemble
+      if (wsOpt) { wsOpt.close(); wsOpt = null; }
+      maskPoints    = [];
+      maskCommitted = false;
+      _optimizerRunning = false;
+      if (map.getSource(SRC_MASK))      map.getSource(SRC_MASK).setData(emptyFC());
+      if (map.getSource(SRC_MASK_PREV)) map.getSource(SRC_MASK_PREV).setData(emptyFC());
+      if (map.getLayer("ensemble-layer")) map.setLayoutProperty("ensemble-layer", "visibility", "none");
+      _ensembleVisible = false;
+      document.getElementById("btn-close-mask").style.display = "none";
+      document.getElementById("btn-clear-mask").style.display = "none";
+      document.getElementById("btn-run-opt").disabled = true;
+      document.getElementById("opt-elapsed-row").style.display = "none";
+      document.getElementById("opt-result-box").style.display = "none";
+      _showOptModal(false, 0);
+
       setStatus("Cleared. Drop ignition points then click Run Simulation.", "info");
       _dbg("Cleared.", "#a6adc8");
     }
@@ -2062,6 +2512,30 @@
 
     _3dPinMarkers.push({ el: el, reposition: reposition, lat: lat, lon: lon });
   }
+
+  // ── Optimizer progress modal ─────────────────────────────────────────────
+  </script>
+  <div id="opt-modal">
+    <div id="opt-modal-title">
+      <span class="opt-spin">🔥</span> Calibrating · projecting +1 h
+    </div>
+    <div id="opt-progress-track"><div id="opt-progress-fill"></div></div>
+    <div class="opt-stat-row">
+      <span>Fire age (target)</span><b id="opt-modal-age">—</b>
+    </div>
+    <div class="opt-stat-row">
+      <span>Iteration</span><b id="opt-iter-val">—</b>
+    </div>
+    <div class="opt-stat-row">
+      <span>Particles evaluated</span><b id="opt-done-val">—</b>
+    </div>
+    <div class="opt-stat-row">
+      <span>ETA</span><b id="opt-eta-val">—</b>
+    </div>
+    <div id="opt-modal-iou">IoU —</div>
+    <button id="opt-modal-btn" onclick="document.getElementById('opt-modal').classList.remove('visible')">Minimise</button>
+  </div>
+  <script>
 
   // A. Ctrl + Left-click — intercept before MapLibre sees the event.
   // stopImmediatePropagation: prevents MapLibre's Ctrl+drag rotate gesture (bug-b).

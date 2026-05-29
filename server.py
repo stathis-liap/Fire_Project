@@ -436,9 +436,142 @@ def _apply_water_drop(land: Landscape, sim: CellularAutomataFire,
     return affected
 
 
-# 
+# ─────────────────────────────────────────────────────────────────────────────
+# Particle-swarm optimizer task (runs in a background thread via asyncio)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _run_optimizer_task(send, msg_init: dict, opt_msg: dict,
+                               ctrl: dict) -> None:
+    """
+    Launch the PSO optimizer in a thread-pool thread, stream progress
+    updates back over WebSocket, then send the final result.
+    """
+    try:
+        from pipeline.particle_optimizer import run_particle_swarm
+    except Exception as exc:
+        await send({"type": "error",
+                    "message": f"Optimizer import failed: {exc}"})
+        ctrl["optimizer_running"] = False
+        return
+
+    n_particles   = max(4,  min(100, int(opt_msg.get("n_particles", 20))))
+    n_iterations  = max(3,  min(50,  int(opt_msg.get("n_iterations", 12))))
+    elapsed_hours = max(0.1, float(opt_msg.get("elapsed_hours", 6.0)))
+    truth_mask_geo = opt_msg.get("truth_mask_geojson",
+                                  {"type": "FeatureCollection", "features": []})
+
+    await send({"type": "optimizer_status",
+                "message": (
+                    f"Optimizer starting: {n_particles} particles × {n_iterations} iterations"
+                    f" — fire age {elapsed_hours:.2f} h…"
+                )})
+
+    loop           = asyncio.get_event_loop()
+    progress_queue: asyncio.Queue = asyncio.Queue()
+
+    def _progress_cb(iteration, n_done, n_total, best_iou, eta_s):
+        loop.call_soon_threadsafe(
+            progress_queue.put_nowait,
+            {
+                "type":      "optimizer_progress",
+                "iteration": iteration,
+                "n_done":    n_done,
+                "n_total":   n_total,
+                "best_iou":  round(float(best_iou), 4),
+                "eta_s":     max(0, int(eta_s)),
+            },
+        )
+
+    async def _drain():
+        while True:
+            msg = await progress_queue.get()
+            if msg is None:
+                break
+            try:
+                await send(msg)
+            except Exception:
+                pass
+
+    drain_task = asyncio.create_task(_drain())
+
+    try:
+        result = await asyncio.to_thread(
+            run_particle_swarm,
+            msg_init, truth_mask_geo, n_particles, n_iterations,
+            elapsed_hours=elapsed_hours,
+            progress_cb=_progress_cb,
+        )
+    except Exception as exc:
+        log.error("Optimizer failed: %s", exc)
+        traceback.print_exc()
+        await progress_queue.put(None)
+        await drain_task
+        await send({"type": "error",
+                    "message": f"Optimizer failed: {exc}"})
+        ctrl["optimizer_running"] = False
+        return
+
+    await progress_queue.put(None)   # signal drain to stop
+    await drain_task
+
+    geo = result["geo_grid"]
+    await send({
+        "type":            "optimizer_result",
+        "best_params":     result["best_params"],
+        "best_iou":        round(result["best_iou"], 4),
+        "heatmap_png_b64": result.get("heatmap_png_b64", ""),
+        "lat_min":         geo.lat_min,
+        "lat_max":         geo.lat_max,
+        "lon_min":         geo.lon_min,
+        "lon_max":         geo.lon_max,
+    })
+    log.info("Optimizer complete — best IoU %.3f", result["best_iou"])
+    ctrl["optimizer_running"] = False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Optimizer-only session handler (opened via "init_optimizer" message)
+# Completely isolated from the live simulation — no fire CA is created.
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _handle_optimizer_session(websocket, send, msg_init: dict) -> None:
+    """
+    Handles a WebSocket connection that arrives with type='init_optimizer'.
+    No fire simulation is ever spawned — this session exists purely to run
+    the PSO calibration and return ensemble results.
+    """
+    log.info("Optimizer session opened  %s", websocket.remote_address)
+    await send({"type": "init_optimizer_ack",
+                "message": "Optimizer session ready."})
+
+    ctrl = {"optimizer_running": False}
+
+    async for raw_msg in websocket:
+        try:
+            iv       = json.loads(raw_msg)
+            msg_type = iv.get("type", "")
+
+            if msg_type == "run_optimizer":
+                if ctrl["optimizer_running"]:
+                    await send({"type": "optimizer_status",
+                                "message": "Optimizer already running — please wait."})
+                else:
+                    ctrl["optimizer_running"] = True
+                    asyncio.create_task(
+                        _run_optimizer_task(send, msg_init, iv, ctrl)
+                    )
+            else:
+                log.debug("Optimizer session: unexpected msg type '%s'", msg_type)
+
+        except Exception as exc:
+            log.warning("Optimizer session: bad message: %s", exc)
+
+    log.info("Optimizer session closed  %s", websocket.remote_address)
+
+
+#
 # Per-connection handler
-# 
+#
 
 async def _handle(websocket):
     log.info("Client connected  %s", websocket.remote_address)
@@ -457,9 +590,16 @@ async def _handle(websocket):
         await send({"type": "error", "message": f"Bad message: {exc}"})
         return
 
-    if msg.get("type") != "init":
+    msg_type_recv = msg.get("type")
+
+    # Route optimizer-only connections to their own dedicated handler.
+    if msg_type_recv == "init_optimizer":
+        await _handle_optimizer_session(websocket, send, msg)
+        return
+
+    if msg_type_recv != "init":
         await send({"type": "error",
-                    "message": f"Expected 'init', got '{msg.get('type')}'."})
+                    "message": f"Expected 'init', got '{msg_type_recv}'."})
         return
 
     await send({"type": "status", "message": "Building landscape..."})
