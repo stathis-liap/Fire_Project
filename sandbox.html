@@ -293,6 +293,18 @@
     }
     .map-tab.active { background: #313244; color: #cdd6f4; }
     .map-tab:hover:not(.active) { color: #a6adc8; }
+    /* 3-D view button — always visible, state driven by .sim3d-live class */
+    #tab-3d-view {
+      border-left: 1px solid rgba(137,180,250,0.22);
+      margin-left: 2px;
+      color: #6c7086;          /* muted but clearly visible */
+      cursor: default;
+    }
+    #tab-3d-view.sim3d-live {
+      color: #89b4fa;
+      cursor: pointer;
+    }
+    #tab-3d-view.sim3d-live:hover { color: #cba6f7; background: #1e1e2e; }
 
     /* ── Vegetation legend ───────────────────────────────────────────────── */
     #veg-legend {
@@ -318,9 +330,64 @@
       max-width: 400px; max-height: 220px; overflow-y: auto; pointer-events: none;
     }
 
+    /* ── Events panel (footer-centered subtitle bar) ───────────────────── */
+    #events-panel {
+      position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+      z-index: 1105;
+      width: min(96%, 640px); max-width: 920px; height: auto; max-height: 180px;
+      background: rgba(8,8,12,0.92);
+      border: 1px solid rgba(137,180,250,0.10);
+      border-radius: 12px; backdrop-filter: blur(6px);
+      display: flex; flex-direction: column; align-items: stretch; overflow: hidden;
+      padding: 8px 12px; gap: 8px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial;
+    }
+    #events-panel.collapsed {
+      max-height: 46px;
+      padding-bottom: 0;
+    }
+    #events-panel.collapsed #events-list {
+      display: none;
+    }
+    #events-hdr {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      flex-shrink: 0; color: #89b4fa; font-weight: 700; font-size: 15px;
+      white-space: nowrap; padding: 2px 4px;
+      cursor: pointer;
+    }
+    #ev-clear-btn {
+      background: none; border: none; color: #a6adc8;
+      cursor: pointer; font-size: 18px; padding: 4px 6px; line-height: 1;
+      margin-left: 10px;
+    }
+    #ev-clear-btn:hover { color: #f38ba8; }
+    #events-list {
+      overflow-y: auto; padding: 4px 6px; flex: 1; display: flex; flex-direction: column;
+      gap: 6px; max-height: calc(3 * 44px + 12px); /* show up to 3 items */
+    }
+    .ev {
+      display: flex; gap: 8px; align-items: center; padding: 8px 10px;
+      background: rgba(255,255,255,0.02); border-radius: 7px;
+      font-size: 15px; line-height: 1.05; color: #cdd6f4;
+      min-height: 44px; width: 100%; box-sizing: border-box;
+    }
+    .ev-t   { color: #84a0c6; flex-shrink: 0; min-width: 72px; font-size: 13px; }
+    .ev-icon{ flex-shrink: 0; font-size: 18px; }
+    .ev-msg { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+    .ev-ignition    .ev-msg { color: #f38ba8; }
+    .ev-danger      .ev-msg { color: #fab387; }
+    .ev-milestone   .ev-msg { color: #89b4fa; }
+    .ev-ok          .ev-msg { color: #a6e3a1; }
+    .ev-warn        .ev-msg { color: #f9e2af; }
+    .ev-intervention .ev-msg{ color: #89dceb; }
+    .ev-weather     .ev-msg { color: #74c7ec; }
+    .ev-info        .ev-msg { color: #7f849c; }
+
     /* ── 3D terrain mesh popup (middle-click) ────────────────────────────── */
     #mesh-popup {
-      position: fixed; width: 520px; height: 460px;
+      position: fixed; width: 480px; height: 420px;
+      max-width: calc(100vw - 24px); max-height: calc(100vh - 24px);
       background: rgba(10,10,18,0.97);
       border: 1.5px solid rgba(249,226,47,0.28);
       border-radius: 10px;
@@ -440,8 +507,10 @@
 
   <!-- Map view tabs -->
   <div id="map-tabs">
-    <button class="map-tab active" id="tab-satellite" onclick="setMapTab('satellite')">🛰 Satellite</button>
+    <button class="map-tab active" id="tab-satellite"  onclick="setMapTab('satellite')">🛰 Satellite</button>
     <button class="map-tab"        id="tab-vegetation" onclick="setMapTab('vegetation')">🌿 Vegetation</button>
+    <button class="map-tab"        id="tab-3d-view"    onclick="request3DView()"
+            title="Launch 3D terrain view (start a simulation first)">🧊 3D View</button>
   </div>
 
   <!-- Vegetation legend (shown when vegetation tab is active) -->
@@ -623,6 +692,15 @@
   <!-- Debug overlay -->
   <div id="dbg"></div>
 
+  <!-- Events panel -->
+  <div id="events-panel">
+    <div id="events-hdr" onclick="expandEventsPanel()">
+      <span>&#x1F4CB; Fire Events</span>
+      <button id="ev-clear-btn" onclick="toggleEventsPanel(event)" title="Minimize fire info">—</button>
+    </div>
+    <div id="events-list"></div>
+  </div>
+
   <script>
     // ── Debug ─────────────────────────────────────────────────────────────────
     (function () {
@@ -662,6 +740,69 @@
     var ws                = null;
     var simRunning        = false;
     var mode              = "ignite";
+
+    // ── Events panel state ────────────────────────────────────────────────────
+    var _evLog = []; // [{time,icon,type,msg}]
+
+    function _addEvent(type, icon, text) {
+      var now = new Date();
+      var ts  = now.toLocaleTimeString('en-GB',
+                  {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      _evLog.push({ts: ts, type: type, icon: icon, msg: text});
+      var list = document.getElementById('events-list');
+      if (!list) return;
+      var div = document.createElement('div');
+      div.className = 'ev ev-' + type;
+      div.innerHTML = '<span class="ev-t">' + ts + '</span>' +
+                      '<span class="ev-icon">' + icon + '</span>' +
+                      '<span class="ev-msg">' + text + '</span>';
+      // Append new event and trim to max 3 visible entries
+      list.appendChild(div);
+      // Keep only latest 3 events in DOM
+      while (list.children.length > 3) {
+        list.removeChild(list.firstChild);
+        _evLog.shift();
+      }
+      // Auto-scroll to bottom (latest)
+      list.scrollTop = list.scrollHeight;
+    }
+
+    function clearEvents() {
+      _evLog = [];
+      var list = document.getElementById('events-list');
+      if (list) list.innerHTML = '';
+    }
+
+    function _updateEventsPanelBtn() {
+      var btn = document.getElementById('ev-clear-btn');
+      var panel = document.getElementById('events-panel');
+      if (!btn || !panel) return;
+      var collapsed = panel.classList.contains('collapsed');
+      btn.textContent = collapsed ? '▾' : '—';
+      btn.title = collapsed ? 'Expand fire info' : 'Minimize fire info';
+    }
+
+    function collapseEventsPanel() {
+      var panel = document.getElementById('events-panel');
+      if (!panel) return;
+      panel.classList.add('collapsed');
+      _updateEventsPanelBtn();
+    }
+
+    function expandEventsPanel() {
+      var panel = document.getElementById('events-panel');
+      if (!panel || !panel.classList.contains('collapsed')) return;
+      panel.classList.remove('collapsed');
+      _updateEventsPanelBtn();
+    }
+
+    function toggleEventsPanel(e) {
+      if (e && e.stopPropagation) e.stopPropagation();
+      var panel = document.getElementById('events-panel');
+      if (!panel) return;
+      panel.classList.toggle('collapsed');
+      _updateEventsPanelBtn();
+    }
     var ignitionPoints    = [];
     var firebreakPoints   = [];
     var committedFirebreaks = [];
@@ -852,6 +993,52 @@
       map.on("click", onMapClick);
       setStatus("Ready. Drop ignition points then click Run Simulation.");
       _dbg("Map layers set up.", "#a6e3a1");
+    }
+
+    // ── 3-D view tab: open mesh popup centred on ignition AABB ───────────────
+    function request3DView() {
+      if (!ignitionPoints || ignitionPoints.length === 0) {
+        setStatus("Place at least one ignition point first.", "err");
+        return;
+      }
+
+      // ── Compute AABB + 2 km offset ──────────────────────────────────────────
+      var lats = ignitionPoints.map(function(p){ return p.lat; });
+      var lngs = ignitionPoints.map(function(p){ return p.lng; });
+      var lat_min = Math.min.apply(null, lats);
+      var lat_max = Math.max.apply(null, lats);
+      var lng_min = Math.min.apply(null, lngs);
+      var lng_max = Math.max.apply(null, lngs);
+      var c_lat   = (lat_min + lat_max) / 2;
+      var c_lng   = (lng_min + lng_max) / 2;
+
+      var cosLat  = Math.cos(c_lat * Math.PI / 180);
+      var w_m     = (lng_max - lng_min) * 111320 * cosLat;
+      var h_m     = (lat_max - lat_min) * 111320;
+
+      // Single point → 4 km square;  multiple → AABB + 2 km each side
+      var extent_m = (ignitionPoints.length === 1)
+                     ? 4000
+                     : Math.max(w_m, h_m) + 4000;   // +2 km per side
+
+      // ── Centre the popup on screen ─────────────────────────────────────────
+      // openMeshPopup positions as:  left = screenX+18,  top = screenY-70
+      var pw = 680, ph = 580;
+      var sx = (window.innerWidth  - pw) / 2 - 18;
+      var sy = (window.innerHeight - ph) / 2 + 70;
+
+      setStatus("Loading 3D terrain (" + (extent_m/1000).toFixed(1) + " km sq)…", "info");
+      _sim3d.fromTab  = true;   // flag: arm fire overlay when carousel renders
+      _sim3d.active   = false;
+      openMeshPopup(c_lat, c_lng, sx, sy, extent_m, pw, ph);
+    }
+
+    function _set3DButtonState(running) {
+      var btn = document.getElementById("tab-3d-view");
+      if (!btn) return;
+      btn.textContent = "🧊 3D View";
+      if (running) btn.classList.add("sim3d-live");
+      else         btn.classList.remove("sim3d-live");
     }
 
     // ── Map tab switching ─────────────────────────────────────────────────────
@@ -1832,6 +2019,7 @@
         _dtMinutes = msg.dt_minutes || 0.05;
         setStatus(msg.message || "Simulation started.", "ok");
         _dbg("init_ack: " + msg.cols + "x" + msg.rows + " grid, cell=" + (msg.cell_m || 0).toFixed(0) + "m", "#89b4fa");
+        clearEvents();
         if (msg.osm_overlay_stats) {
           var s = msg.osm_overlay_stats;
           _dbg("OSM overlay active: roads=" + (s.road_cells || 0) + " cells, urban=" + (s.urban_cells || 0) + " cells", "#a6e3a1");
@@ -1867,32 +2055,67 @@
           document.getElementById("btn-resume").style.display = "block";
         }
 
+      } else if (msg.type === "fire_event") {
+        _addEvent(msg.event_type || 'info', msg.icon || 'ℹ️', msg.message || '');
+
       } else if (msg.type === "error") {
         setStatus("Error: " + msg.message, "err");
         _dbg("Error: " + msg.message, "#f38ba8");
 
       } else if (msg.type === "frame") {
         renderFireFrame(msg);
-        _renderGlow(msg.geojson_burning);
-        _spawnSmoke(msg.geojson_burning);
-        var elapsed = msg.minutes_since_ignition;
-        var wall    = msg.wall_clock_minutes;
-        updateStats(msg.step, msg.active_ha, msg.burned_ha, elapsed, wall);
-        _applyAtmoOverlay(elapsed || 0);
-        _showWeatherStrip({ simMinutes: elapsed, wall_clock_minutes: wall });
-        _updateRiskPanel(msg.step, msg.active_ha, msg.burned_ha, elapsed,
-                         { N: msg.ros_N || 0, E: msg.ros_E || 0,
-                           S: msg.ros_S || 0, W: msg.ros_W || 0 });
-        _updateAudio(msg.active_ha);
-        var sc = document.getElementById("scrubber");
-        if (sc && simRunning) {
-          if (+sc.max < msg.step) sc.max = msg.step;
-          sc.value = msg.step;
-        }
-        if (msg.step % 100 === 0) {
-          _dbg("Step " + msg.step + ": active=" + (msg.active_ha || 0).toFixed(1) +
-               "ha burned=" + (msg.burned_ha || 0).toFixed(1) + "ha", "#f9e2af");
-        }
+          // Coalesce incoming frames and process at display refresh rate to avoid
+          // blocking on frequent heavy updates (map.setData, canvas draws).
+          window._pendingFrame = msg;
+          if (!window._frameTickScheduled) {
+            window._frameTickScheduled = true;
+            requestAnimationFrame(function () {
+              window._frameTickScheduled = false;
+              var fmsg = window._pendingFrame;
+              window._pendingFrame = null;
+              if (!fmsg) return;
+
+              // Update map layers (geojson) once per RAF
+              renderFireFrame(fmsg);
+
+              // Canvas overlays: glow + smoke (smoke spawn throttled)
+              _renderGlow(fmsg.geojson_burning);
+              var nowMs = Date.now();
+              if (!window._lastSmokeSpawn || nowMs - window._lastSmokeSpawn > 250) {
+                _spawnSmoke(fmsg.geojson_burning);
+                window._lastSmokeSpawn = nowMs;
+              }
+
+              // 3D overlay (already throttled by INTERVAL)
+              if (_sim3d.active) {
+                var _t3d = Date.now();
+                if (_t3d - _sim3d.lastUpdate > _sim3d.INTERVAL) {
+                  _sim3d.lastUpdate = _t3d;
+                  _update3DFireOverlay(fmsg.geojson_burning, fmsg.geojson_burned);
+                }
+              }
+
+              var elapsed = fmsg.minutes_since_ignition;
+              var wall    = fmsg.wall_clock_minutes;
+              updateStats(fmsg.step, fmsg.active_ha, fmsg.burned_ha, elapsed, wall);
+              _applyAtmoOverlay(elapsed || 0);
+              _showWeatherStrip({ simMinutes: elapsed, wall_clock_minutes: wall });
+              _updateRiskPanel(fmsg.step, fmsg.active_ha, fmsg.burned_ha, elapsed,
+                               { N: fmsg.ros_N || 0, E: fmsg.ros_E || 0,
+                                 S: fmsg.ros_S || 0, W: fmsg.ros_W || 0 });
+              _updateAudio(fmsg.active_ha);
+
+              var sc = document.getElementById("scrubber");
+              if (sc && simRunning) {
+                if (+sc.max < fmsg.step) sc.max = fmsg.step;
+                sc.value = fmsg.step;
+              }
+              if (fmsg.step % 100 === 0) {
+                _dbg("Step " + fmsg.step + ": active=" + (fmsg.active_ha || 0).toFixed(1) +
+                     "ha burned=" + (fmsg.burned_ha || 0).toFixed(1) + "ha", "#f9e2af");
+              }
+            });
+          }
 
       } else if (msg.type === "history_ready") {
         _setupScrubber(msg);
@@ -1948,34 +2171,60 @@
       document.getElementById("btn-run").style.display    = "none";
       document.getElementById("btn-pause").style.display  = "block";
       document.getElementById("btn-resume").style.display = "none";
-      setStatus("Connecting to ws://localhost:8765...", "info");
 
-      ws = new WebSocket(WS_URL);
-      ws.onopen = function () {
-        setStatus("Connected. Sending init...", "info");
-        ws.send(JSON.stringify(initMsg));
-        map.fitBounds(
-          [[approxBbox.lon_min, approxBbox.lat_min], [approxBbox.lon_max, approxBbox.lat_max]],
-          { padding: 40, duration: 1000 }
-        );
-        if (!_smokeRAF) _animateSmoke();
-      };
-      ws.onmessage = function (ev) {
-        var msg;
-        try { msg = JSON.parse(ev.data); } catch (e) { return; }
-        _handleMsg(msg);
-      };
-      ws.onerror = function () {
-        setStatus("Connection error — is server.py running? (python server.py)", "err");
-        _resetButtons();
-        simRunning = false;
-      };
-      ws.onclose = function () {
-        setStatus("Simulation finished.", "ok");
-        simRunning = false;
-        _resetButtons();
-        _updateAudio(0);
-      };
+      // ── WebSocket with automatic retry (server may still be initialising) ──
+      var _wsAttempt = 0;
+      var _wsMaxAttempts = 6;
+
+      function _connect() {
+        _wsAttempt++;
+        setStatus("Connecting to simulation server (attempt " + _wsAttempt + "/" + _wsMaxAttempts + ")…", "info");
+
+        if (ws) { try { ws.close(); } catch(e){} ws = null; }
+        ws = new WebSocket(WS_URL);
+
+        ws.onopen = function () {
+          _wsAttempt = 0;
+          setStatus("Connected — building landscape…", "info");
+          ws.send(JSON.stringify(initMsg));
+          map.fitBounds(
+            [[approxBbox.lon_min, approxBbox.lat_min],
+             [approxBbox.lon_max, approxBbox.lat_max]],
+            { padding: 40, duration: 1000 }
+          );
+          if (!_smokeRAF) _animateSmoke();
+        };
+
+        ws.onmessage = function (ev) {
+          var msg;
+          try { msg = JSON.parse(ev.data); } catch (e) { return; }
+          try { _handleMsg(msg); } catch (e) {
+            console.error("_handleMsg error:", e);
+          }
+        };
+
+        ws.onerror = function () {
+          if (_wsAttempt < _wsMaxAttempts && simRunning) {
+            var delay = Math.min(1000 + _wsAttempt * 400, 3000);
+            setStatus("Server not ready — retrying in " + (delay/1000).toFixed(1) + "s…", "info");
+            setTimeout(_connect, delay);
+          } else {
+            setStatus("Cannot reach simulation server. Make sure python main.py is running.", "err");
+            _resetButtons();
+            simRunning = false;
+          }
+        };
+
+        ws.onclose = function () {
+          if (!simRunning) return;  // intentional close (pause/end)
+          setStatus("Simulation finished.", "ok");
+          simRunning = false;
+          _resetButtons();
+          _updateAudio(0);
+        };
+      }
+
+      _connect();
     }
 
     function pauseSim() {
@@ -2085,7 +2334,7 @@
     <div style="position:absolute; right:18px; top:18px; z-index:1210;">
       <button onclick="closeMeshModal()" style="padding:8px 12px; font-weight:700;">Close</button>
     </div>
-    <div id="mesh-canvas-container" style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:85vw; height:85vh; background:#0a0a14; border-radius:8px; overflow:hidden; display:flex;">
+    <div id="mesh-canvas-container" style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:72vw; height:72vh; background:#0a0a14; border-radius:8px; overflow:hidden; display:flex;">
     </div>
   </div>
 
@@ -2192,6 +2441,18 @@
   var _meshActiveLat    = null;   // lat/lon of the pin whose popup is open
   var _meshActiveLon    = null;
 
+  // ── Fire overlay state (3D View tab) ─────────────────────────────────────
+  var _sim3d = {
+    active:     false,      // overlay is armed and ready to update
+    fromTab:    false,      // next _showCarousel call came from request3DView()
+    origColors: null,       // ["rgb(r,g,b)",...] — satellite vertex colors (immutable)
+    bounds:     null,       // {west, south, east, north} in degrees
+    nRows:      0,          // mesh vertex rows  (n_mesh_rows from meta)
+    nCols:      0,          // mesh vertex cols  (n_mesh_cols from meta)
+    lastUpdate: 0,          // Date.now() of last Plotly.restyle call
+    INTERVAL:   1800,       // ms between overlay refreshes (throttle)
+  };
+
   // ── Drag-to-move (skip when clicking buttons) ─────────────────────────────
   (function () {
     var popup = document.getElementById('mesh-popup');
@@ -2257,23 +2518,26 @@
     closeMeshPopup();
   }
 
-  function openMeshPopup(lat, lon, screenX, screenY) {
+  function openMeshPopup(lat, lon, screenX, screenY, extentM, popW, popH) {
     _meshActiveLat = lat;
     _meshActiveLon = lon;
     var popup = document.getElementById('mesh-popup');
-    var pw = 520, ph = 460;
+    var pw = popW || 520, ph = popH || 460;
     popup.style.left   = Math.max(10, Math.min(screenX + 18, window.innerWidth  - pw - 10)) + 'px';
     popup.style.top    = Math.max(10, Math.min(screenY - 70, window.innerHeight - ph - 10)) + 'px';
     popup.style.width  = pw + 'px';
     popup.style.height = ph + 'px';
+    var titleKm = extentM ? ('  ' + (extentM/1000).toFixed(1) + ' km') : '';
     document.getElementById('mesh-popup-title').textContent =
-      '3D Terrain  —  ' + lat.toFixed(4) + '°N  ' + lon.toFixed(4) + '°E';
+      '3D Terrain  —  ' + lat.toFixed(4) + '°N  ' + lon.toFixed(4) + '°E' + titleKm;
     popup.classList.add('visible');
 
     var bboxDeg   = Math.min(parseFloat(document.getElementById('bbox').value) || 0.025, 0.04);
     var windSpeed = parseFloat(document.getElementById('wind-speed').value) || null;
     var windDir   = parseFloat(document.getElementById('wind-dir').value)   || null;
-    var cacheKey  = lat.toFixed(4) + ':' + lon.toFixed(4) + ':' + bboxDeg.toFixed(4);
+    // Include extent in cache key so different sizes don't collide
+    var cacheKey  = lat.toFixed(4) + ':' + lon.toFixed(4) + ':' + bboxDeg.toFixed(4)
+                    + ':' + (extentM ? extentM.toFixed(0) : '0');
 
     // B. Serve from cache if available
     if (_meshCache[cacheKey]) {
@@ -2290,10 +2554,13 @@
     document.getElementById('mesh-popup-loadstep').textContent  = 'Fetching DEM…';
     _setMeshStep('dem');
 
+    var reqBody = { lat: lat, lon: lon, bbox_deg: bboxDeg,
+                    wind_speed: windSpeed, wind_dir: windDir };
+    if (extentM) reqBody.extent_m = extentM;
+
     fetch(MESH_API_URL, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lat: lat, lon: lon, bbox_deg: bboxDeg,
-                              wind_speed: windSpeed, wind_dir: windDir })
+      body: JSON.stringify(reqBody)
     })
     .then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -2355,6 +2622,12 @@
            data.meta.dem_shape[0] + 'x' + data.meta.dem_shape[1] + airTag, '#a6adc8');
     }
     setStatus('3D plots ready — drag to rotate, scroll to zoom.', 'ok');
+
+    // Arm fire overlay if this carousel was triggered from the 3D View tab
+    if (_sim3d.fromTab) {
+      _sim3d.fromTab = false;
+      _setup3DFireOverlay(data);
+    }
   }
 
   // ── E. Wind arrows toggle ─────────────────────────────────────────────────
@@ -2451,6 +2724,117 @@
     });
   }
 
+  // ── 3-D fire overlay ─────────────────────────────────────────────────────
+
+  function _setup3DFireOverlay(data) {
+    try {
+      var triData = JSON.parse(data.plotly_tri);
+      var trace   = triData.data && triData.data[0];
+      if (!trace || !trace.vertexcolor || !trace.vertexcolor.length) {
+        _dbg('3D fire overlay: no vertexcolor in mesh (no satellite texture?)', '#f9e2af');
+        return;
+      }
+      var m = data.meta;
+      if (!m || !m.bounds || !m.n_mesh_rows || !m.n_mesh_cols) return;
+
+      _sim3d.origColors = trace.vertexcolor.slice();
+      _sim3d.bounds     = m.bounds;
+      _sim3d.nRows      = m.n_mesh_rows;
+      _sim3d.nCols      = m.n_mesh_cols;
+      _sim3d.lastUpdate = 0;
+      _sim3d.active     = true;
+      _dbg('3D fire overlay ready (' + _sim3d.nRows + 'x' + _sim3d.nCols +
+           ' verts, bounds ' + m.bounds.west.toFixed(3) + '...' +
+           m.bounds.east.toFixed(3) + ')', '#a6e3a1');
+    } catch (e) {
+      _dbg('3D fire overlay setup error: ' + e, '#f38ba8');
+    }
+  }
+
+  function _rasterizeFireState(gjBurning, gjBurned, bounds, nR, nC) {
+    // Upscale canvas for sub-cell coverage accuracy
+    var SCALE = Math.max(2, Math.min(6, Math.floor(400 / Math.max(nR, nC))));
+    var CW = nC * SCALE, CH = nR * SCALE;
+    var cv  = document.createElement('canvas');
+    cv.width = CW;  cv.height = CH;
+    var ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, CW, CH);
+
+    function proj(lon, lat) {
+      return [
+        (lon - bounds.west)  / (bounds.east  - bounds.west)  * CW,
+        (bounds.north - lat) / (bounds.north - bounds.south) * CH
+      ];
+    }
+
+    function fillFC(gj, color) {
+      if (!gj || !gj.features || !gj.features.length) return;
+      ctx.fillStyle = color;
+      gj.features.forEach(function(feat) {
+        var g = feat.geometry; if (!g) return;
+        var polys = g.type === 'MultiPolygon' ? g.coordinates : [g.coordinates];
+        polys.forEach(function(poly) {
+          poly.forEach(function(ring, ri) {
+            if (ri > 0) return;   // skip holes for performance
+            if (!ring.length) return;
+            ctx.beginPath();
+            var p0 = proj(ring[0][0], ring[0][1]);
+            ctx.moveTo(p0[0], p0[1]);
+            for (var k = 1; k < ring.length; k++) {
+              var pk = proj(ring[k][0], ring[k][1]); ctx.lineTo(pk[0], pk[1]);
+            }
+            ctx.closePath(); ctx.fill();
+          });
+        });
+      });
+    }
+
+    // Draw burned first (state=2 → red channel), then burning on top (state=1 → green)
+    fillFC(gjBurned,  'rgba(200,0,0,1)');
+    fillFC(gjBurning, 'rgba(0,200,0,1)');
+
+    var px = ctx.getImageData(0, 0, CW, CH).data;
+    var grid = new Uint8Array(nR * nC);
+
+    // Mesh row 0 = south → canvas row CH-1 (Y-flip)
+    for (var ri = 0; ri < nR; ri++) {
+      var cy = Math.min(CH - 1, Math.round(CH - (ri + 0.5) * SCALE));
+      for (var ci = 0; ci < nC; ci++) {
+        var cx   = Math.min(CW - 1, Math.round((ci + 0.5) * SCALE));
+        var base = (cy * CW + cx) * 4;
+        var r = px[base], gv = px[base + 1];
+        grid[ri * nC + ci] = gv > 100 ? 1 : (r > 100 ? 2 : 0);
+      }
+    }
+    return grid;
+  }
+
+  function _blendFire(orig, state) {
+    if (state === 0) return orig;
+    var m = orig.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/);
+    if (!m) return orig;
+    var sr = +m[1], sg = +m[2], sb = +m[3], fr, fg, fb, fa;
+    if (state === 1) { fr = 255; fg = 120; fb =  0; fa = 0.72; }   // burning → vivid orange
+    else             { fr =  50; fg =  20; fb = 10; fa = 0.58; }   // burned  → dark charcoal
+    return 'rgb(' +
+      Math.round(sr*(1-fa) + fr*fa) + ',' +
+      Math.round(sg*(1-fa) + fg*fa) + ',' +
+      Math.round(sb*(1-fa) + fb*fa) + ')';
+  }
+
+  function _update3DFireOverlay(gjBurning, gjBurned) {
+    if (!_sim3d.active || !_sim3d.origColors || !_sim3d.bounds) return;
+    var el = document.getElementById('mesh-plot-2');
+    if (!el || !el._fullData || !el._fullData.length) return;
+
+    var grid = _rasterizeFireState(gjBurning, gjBurned,
+                                   _sim3d.bounds, _sim3d.nRows, _sim3d.nCols);
+    var orig = _sim3d.origColors;
+    var nc   = new Array(orig.length);
+    for (var i = 0; i < orig.length; i++) nc[i] = _blendFire(orig[i], grid[i]);
+    Plotly.restyle(el, { vertexcolor: [nc] }, [0]);
+  }
+
   // ── Close popup ────────────────────────────────────────────────────────────
   function closeMeshPopup() {
     var popup = document.getElementById('mesh-popup');
@@ -2461,6 +2845,8 @@
     });
     _meshWindOn = false;
     _meshCurrentSlide = 0;
+    _sim3d.active     = false;
+    _sim3d.origColors = null;
   }
 
   // ── Yellow "3D" pin marker ─────────────────────────────────────────────────

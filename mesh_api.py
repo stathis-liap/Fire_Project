@@ -129,23 +129,120 @@ def _generate_dem(n: int) -> tuple[np.ndarray, Landscape]:
     return dem, land
 
 
-def _load_real_dem(lat: float, lon: float, n: int):
+def _fetch_terrarium_dem(west: float, south: float,
+                         east: float, north: float,
+                         n: int, zoom: int = DEM_ZOOM) -> "np.ndarray | None":
     """
-    Fetch Terrarium terrain for a physically square POPUP_EXTENT_M × POPUP_EXTENT_M
+    Fetch Terrarium elevation tiles and return a south-up float32 (n, n) grid.
+    Uses only PIL + numpy — no rasterio required.
+    Terrarium encoding: elevation = R*256 + G + B/256 - 32768 (metres).
+    Falls back to None on failure.
+    """
+    try:
+        from PIL import Image as _PImg
+        import requests as _req
+        from concurrent.futures import ThreadPoolExecutor, as_completed as _asc
+        import io as _io
+
+        TILE    = 256
+        TER_URL = ("https://s3.amazonaws.com/elevation-tiles-prod/"
+                   "terrarium/{z}/{x}/{y}.png")
+
+        x0, y0 = _deg_to_tile(north, west,  zoom)
+        x1, y1 = _deg_to_tile(south, east,  zoom)
+        x1 = max(x1, x0);  y1 = max(y1, y0)
+        nx, ny  = x1 - x0 + 1, y1 - y0 + 1
+
+        print(f"[mesh_api] Terrarium z{zoom}: {nx}x{ny}={nx*ny} tiles ...")
+
+        def _get(tx_ty):
+            tx, ty = tx_ty
+            url    = TER_URL.format(z=zoom, x=tx, y=ty)
+            for _ in range(3):
+                try:
+                    r   = _req.get(url, timeout=20)
+                    r.raise_for_status()
+                    img = _PImg.open(_io.BytesIO(r.content)).convert("RGBA")
+                    arr = np.array(img, dtype=np.float32)
+                    elev = arr[:, :, 0] * 256.0 + arr[:, :, 1] + arr[:, :, 2] / 256.0 - 32768.0
+                    return tx, ty, elev
+                except Exception:
+                    pass
+            return tx, ty, None
+
+        canvas = np.zeros((ny * TILE, nx * TILE), dtype=np.float32)
+        jobs   = [(tx, ty) for ty in range(y0, y1 + 1) for tx in range(x0, x1 + 1)]
+        failed = 0
+        with ThreadPoolExecutor(max_workers=min(16, len(jobs))) as pool:
+            for fut in _asc({pool.submit(_get, j): j for j in jobs}):
+                tx, ty, tile_elev = fut.result()
+                if tile_elev is not None:
+                    row = (ty - y0) * TILE;  col = (tx - x0) * TILE
+                    canvas[row:row + TILE, col:col + TILE] = tile_elev
+                else:
+                    failed += 1
+
+        if failed == len(jobs):
+            print("[mesh_api] Terrarium: all tiles failed")
+            return None
+
+        # Canvas is north-up (row 0 = north).  Crop to exact bbox.
+        nw_lat, nw_lon = _tile_nw_deg(x0,     y0,     zoom)
+        se_lat, se_lon = _tile_nw_deg(x1 + 1, y1 + 1, zoom)
+        H_c, W_c       = canvas.shape[:2]
+        lat_span        = nw_lat - se_lat
+        lon_span        = se_lon - nw_lon
+
+        r0c = max(0, int((nw_lat - north) / lat_span * H_c))
+        r1c = min(H_c, int((nw_lat - south) / lat_span * H_c))
+        c0c = max(0, int((west   - nw_lon) / lon_span * W_c))
+        c1c = min(W_c, int((east  - nw_lon) / lon_span * W_c))
+        cropped = canvas[r0c:r1c, c0c:c1c]
+
+        # Resample to n×n using PIL (float32 mode)
+        img_elev   = _PImg.fromarray(cropped, mode="F")
+        img_scaled = img_elev.resize((n, n), _PImg.BILINEAR)
+        dem        = np.array(img_scaled, dtype=np.float32)
+
+        # Flip to south-up (row 0 = south), clamp negatives
+        dem = np.flipud(dem)
+        dem = np.where(dem < 0, 0.0, dem)
+
+        print(f"[mesh_api] Terrarium DEM {n}x{n} ({cropped.shape[1]}x{cropped.shape[0]} raw px, "
+              f"{failed}/{len(jobs)} failed)")
+        return dem
+
+    except Exception as exc:
+        print(f"[mesh_api] Terrarium DEM error: {exc}")
+        return None
+
+
+def _load_real_dem(lat: float, lon: float, n: int,
+                    extent_m: float = POPUP_EXTENT_M):
+    """
+    Fetch Terrarium terrain for a physically square *extent_m* × *extent_m*
     area centred at (lat, lon) and resample to n×n.
 
-    Uses _square_bounds() so width_m == height_m regardless of latitude.
-    The fetch buffer is lon_buf (slightly larger than lat_buf) to guarantee full
-    coverage; rasterio then crops back to the exact square before resampling.
+    Primary path  : fetch_terrain_from_api  → rasterio crop/resample (if rasterio is installed)
+    Fallback path : _fetch_terrarium_dem    → direct tile fetch with PIL (no rasterio needed)
+    Last resort   : synthetic random terrain
 
     Returns (dem, land, cell_m, bounds=(west, south, east, north)).
-    Falls back to synthetic terrain on any error.
     """
-    west, south, east, north = _square_bounds(lat, lon)
-    cell_m = POPUP_EXTENT_M / n          # always square: same in x and y
+    west, south, east, north = _square_bounds(lat, lon, extent_m=extent_m)
+    cell_m = extent_m / n          # always square: same in x and y
 
     if not _RASTERIO_OK:
-        print("[mesh_api] rasterio not installed — using synthetic terrain")
+        # No rasterio — fetch Terrarium tiles directly with PIL
+        dem = _fetch_terrarium_dem(west, south, east, north, n)
+        if dem is not None:
+            land            = Landscape(config)
+            land.shape      = (n, n)
+            land.elevation  = dem
+            land.fuel_names = getattr(land, "fuel_names", ["Grass", "Shrub", "Forest"])
+            land.fuel_map   = np.zeros((n, n), dtype=int)
+            return dem, land, cell_m, (west, south, east, north)
+        print("[mesh_api] Terrarium fallback failed — using synthetic terrain")
         dem, land = _generate_dem(n)
         return dem, land, cell_m, (west, south, east, north)
 
@@ -181,8 +278,8 @@ def _load_real_dem(lat: float, lon: float, n: int):
         land.fuel_names = getattr(land, "fuel_names", ["Grass", "Shrub", "Forest"])
         land.fuel_map   = np.zeros((n, n), dtype=int)
 
-        print(f"[mesh_api] Real DEM — {n}×{n}  "
-              f"{POPUP_EXTENT_M/1000:.2f}km × {POPUP_EXTENT_M/1000:.2f}km  "
+        print(f"[mesh_api] Real DEM — {n}x{n}  "
+              f"{extent_m/1000:.2f}km x {extent_m/1000:.2f}km  "
               f"cell {cell_m:.1f} m")
         return dem_raw, land, cell_m, (west, south, east, north)
 
@@ -300,7 +397,8 @@ def _fetch_sat_colors(lat: float, lon: float,
     Only used for the mesh slide.
     """
     try:
-        tag        = f"{lat:.4f}_{lon:.4f}_z{SAT_ZOOM}"
+        # Include bounds in cache key so different extents get different files
+        tag        = f"{south:.4f}_{west:.4f}_{north:.4f}_{east:.4f}_z{SAT_ZOOM}"
         cache_path = os.path.join(ROOT_DIR, f"sat_{tag}.jpg")
 
         if os.path.exists(cache_path):
@@ -341,12 +439,17 @@ def make_mesh():
     lon      = float(pay.get("lon"))
     bbox_deg = float(pay.get("bbox_deg", 0.025))
 
+    # Optional extent override (metres, square side).  Default = 2 km popup.
+    # Passed by the 3D-View tab when it uses the AABB of ignition points.
+    extent_m = float(pay.get("extent_m", POPUP_EXTENT_M))
+    extent_m = max(500.0, min(extent_m, 50_000.0))   # clamp 0.5 km – 50 km
+
     # Optional wind input for air-corrected arrows
     wind_speed = pay.get("wind_speed")
     wind_dir   = pay.get("wind_dir")        # FROM direction (meteorological)
 
     n = N_CAP
-    dem, land, cell_m, bounds = _load_real_dem(lat, lon, n)
+    dem, land, cell_m, bounds = _load_real_dem(lat, lon, n, extent_m=extent_m)
     rows, cols = dem.shape
     b_west, b_south, b_east, b_north = bounds
 
@@ -533,11 +636,16 @@ def make_mesh():
         "plotly_tri": json.dumps(fig_tri),
         "wind_grid":  wind_grid,
         "meta": {
-            "center":    [lat, lon],
-            "dem_shape": [rows, cols],
-            "n_pts":     int(len(px)),
-            "n_mesh":    int(len(mx)),
-            "vex":       round(VEX, 2),
+            "center":      [lat, lon],
+            "bounds":      {"west": b_west, "south": b_south,
+                            "east": b_east, "north": b_north},
+            "dem_shape":   [rows, cols],
+            "n_pts":       int(len(px)),
+            "n_mesh":      int(len(mx)),
+            "n_mesh_rows": n_rows_m,
+            "n_mesh_cols": n_cols_m,
+            "cell_m":      round(cell_m, 2),
+            "vex":         round(VEX, 2),
         },
     })
 

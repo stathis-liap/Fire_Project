@@ -1,122 +1,225 @@
 """
-main.py — Project WILSON single-command launcher
-=================================================
-Starts all three servers needed for the Sandbox UI:
+main.py -- Project WILSON single-command launcher
+==================================================
+Starts all three servers and opens the browser automatically.
 
-    Port 8000  — static HTTP server  (sandbox.html)
-    Port 8765  — WebSocket sim server (server.py)
-    Port 5000  — Mesh API            (mesh_api.py / Flask)
+    Port 8000  -- static HTTP  (sandbox.html)
+    Port 8765  -- WebSocket simulation server (server.py)
+    Port 5000  -- Mesh / DEM API  (mesh_api.py)
 
 Usage:
     python main.py
 
-Then open:  http://localhost:8000/sandbox.html
-
-Middle-click the map → yellow 3D pin + Delaunay mesh popup.
-Right-click  the map → full-screen mesh modal (legacy).
+Press Ctrl-C to stop everything cleanly.
 """
 
+import io
+import os
+import signal
+import socket
 import subprocess
 import sys
-import os
-import io
+import threading
 import time
 import webbrowser
-import signal
-import threading
 
-# Re-wrap stdout/stderr as UTF-8 on Windows so unicode chars in print()
-# (arrows, Greek letters, box-drawing) don't crash with charmap errors.
+# ── UTF-8 console on Windows ──────────────────────────────────────────────────
 if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-PY   = sys.executable   # same interpreter that's running this file
-
-# Force UTF-8 stdout/stderr in every child process so Windows charmap never
-# causes UnicodeEncodeError on arrow/Greek characters in log output.
-_UTF8_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
-
-
-def _stream(proc, label, color_code):
-    """Forward a subprocess's stdout to our console with a coloured prefix."""
-    for line in iter(proc.stdout.readline, b""):
-        print(f"\033[{color_code}m[{label}]\033[0m {line.decode(errors='replace').rstrip()}")
+ROOT     = os.path.dirname(os.path.abspath(__file__))
+PY       = sys.executable
+_ENV     = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+_PORTS   = [8000, 8765, 5000]
+_LABELS  = {8000: ("HTTP :8000", "94"), 8765: ("WS   :8765", "93"), 5000: ("MESH :5000", "92")}
 
 
-def launch():
-    procs = []
+# ── Port helpers ──────────────────────────────────────────────────────────────
 
-    # ── 1. Static HTTP server (sandbox.html) ──────────────────────────────────
-    http_proc = subprocess.Popen(
-        [PY, "-m", "http.server", "8000"],
-        cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=_UTF8_ENV,
-    )
-    procs.append(http_proc)
-    threading.Thread(target=_stream, args=(http_proc, "HTTP :8000", "94"), daemon=True).start()
-    print("\033[94m[HTTP :8000]\033[0m  Static server started  ->  http://localhost:8000/sandbox.html")
+def _port_in_use(port: int) -> bool:
+    """Return True if something is already listening on port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.15)
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
-    # ── 2. WebSocket simulation server ────────────────────────────────────────
-    ws_proc = subprocess.Popen(
-        [PY, "server.py"],
-        cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=_UTF8_ENV,
-    )
-    procs.append(ws_proc)
-    threading.Thread(target=_stream, args=(ws_proc, "WS   :8765", "93"), daemon=True).start()
-    print("\033[93m[WS   :8765]\033[0m  WebSocket sim server started")
 
-    # ── 3. Mesh API (Flask) ───────────────────────────────────────────────────
-    mesh_proc = subprocess.Popen(
-        [PY, "mesh_api.py"],
-        cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=_UTF8_ENV,
-    )
-    procs.append(mesh_proc)
-    threading.Thread(target=_stream, args=(mesh_proc, "MESH :5000", "92"), daemon=True).start()
-    print("\033[92m[MESH :5000]\033[0m  Mesh API (Flask) started")
+def _kill_port(port: int) -> None:
+    """Kill the process listening on port (Windows netstat / taskkill)."""
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano"], capture_output=True, text=True, timeout=5
+        ).stdout
+        for line in out.splitlines():
+            if "LISTEN" not in line.upper():
+                continue
+            parts = line.split()
+            # LOCAL ADDRESS is typically 3rd token: 0.0.0.0:8765
+            if not any(p.endswith(f":{port}") for p in parts):
+                continue
+            pid = parts[-1]
+            if not pid.isdigit() or int(pid) <= 4:
+                continue
+            subprocess.run(["taskkill", "/F", "/PID", pid],
+                           capture_output=True, timeout=3)
+            _log(f"Freed :{port} (PID {pid})", "90")
+            return
+    except Exception:
+        pass
 
-    # ── Brief pause then open browser ─────────────────────────────────────────
-    time.sleep(1.2)
-    webbrowser.open("http://localhost:8000/sandbox.html")
-    print()
-    print("\033[1m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
-    print("  \033[1;33m★  WILSON Sandbox is running\033[0m")
-    print()
-    print("  Browser  ->  http://localhost:8000/sandbox.html")
-    print()
-    print("  \033[96mCtrl+click\033[0m   the map  →  yellow 3D pin + interactive mesh popup")
-    print("  \033[90mRight-click\033[0m  the map  →  full-screen mesh modal")
-    print()
-    print("  Press  \033[1mCtrl-C\033[0m  to stop all servers.")
-    print("\033[1m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
-    print()
 
-    # ── Wait for Ctrl-C, then kill all children ────────────────────────────────
+def _wait_port(port: int, want_free: bool, timeout: float = 6.0) -> bool:
+    """Block until port is free (want_free=True) or bound (want_free=False)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        in_use = _port_in_use(port)
+        if want_free and not in_use:
+            return True
+        if not want_free and in_use:
+            return True
+        time.sleep(0.15)
+    return False
+
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+def _log(msg: str, color: str = "0") -> None:
+    print(f"\033[{color}m{msg}\033[0m", flush=True)
+
+
+def _stream(proc: subprocess.Popen, label: str, color: str) -> None:
+    """Pipe a subprocess stdout line-by-line to the console with a coloured tag."""
+    for raw in iter(proc.stdout.readline, b""):
+        line = raw.decode("utf-8", errors="replace").rstrip()
+        if line:
+            print(f"\033[{color}m[{label}]\033[0m {line}", flush=True)
+
+
+# ── Launch ────────────────────────────────────────────────────────────────────
+
+def launch() -> None:
+    # ── Step 1: Release stale processes ──────────────────────────────────────
+    _log("Checking ports ...", "90")
+    for port in _PORTS:
+        if _port_in_use(port):
+            _kill_port(port)
+            _wait_port(port, want_free=True, timeout=3.0)
+
+    # ── Step 2: Start subprocesses ────────────────────────────────────────────
+    cmds = {
+        8000: [PY, "-m", "http.server", "8000"],
+        8765: [PY, "server.py"],
+        5000: [PY, "mesh_api.py"],
+    }
+
+    procs: list[subprocess.Popen] = []
+    for port, cmd in cmds.items():
+        label, color = _LABELS[port]
+        proc = subprocess.Popen(
+            cmd,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=_ENV,
+        )
+        procs.append(proc)
+        threading.Thread(target=_stream, args=(proc, label, color),
+                         daemon=True).start()
+
+    # ── Step 3: Wait until each server is actually listening ──────────────────
+    _log("Waiting for servers to be ready ...", "90")
+    all_ready = True
+    for port in _PORTS:
+        label, color = _LABELS[port]
+        ready = _wait_port(port, want_free=False, timeout=12.0)
+        if ready:
+            _log(f"  [OK] {label}  ->  http://localhost:{port}", color)
+        else:
+            _log(f"  [!!] {label} did not start in time", "91")
+            all_ready = False
+
+    # ── Step 4: Open browser ──────────────────────────────────────────────────
+    url = "http://localhost:8000/sandbox.html"
+    webbrowser.open(url)
+
+    print(flush=True)
+    print("\033[1m" + "=" * 64 + "\033[0m", flush=True)
+    if all_ready:
+        _log("  WILSON Sandbox is running", "1;33")
+    else:
+        _log("  WILSON: some servers did not start — check output above", "91")
+    print(flush=True)
+    _log(f"  Browser  ->  {url}", "0")
+    print(flush=True)
+    _log("  Ctrl+click map  -> 3D terrain popup", "96")
+    _log("  3D View tab     -> fire simulation on 3D terrain", "96")
+    print(flush=True)
+    _log("  Press Ctrl-C to stop all servers.", "0")
+    print("\033[1m" + "=" * 64 + "\033[0m", flush=True)
+    print(flush=True)
+
+    # ── Step 5: Monitor & auto-restart crashed servers ────────────────────────
+    restart_counts = {p.pid: 0 for p in procs}
+
+    def _watchdog(idx: int, cmd: list[str], port: int) -> None:
+        """Restart a server subprocess if it crashes unexpectedly."""
+        label, color = _LABELS[port]
+        while True:
+            proc = procs[idx]
+            proc.wait()                         # blocks until process exits
+            if _shutdown_flag:
+                return
+            restarts = restart_counts.get(proc.pid, 0)
+            if restarts >= 3:
+                _log(f"[{label}] crashed 3 times — giving up", "91")
+                return
+            _log(f"[{label}] crashed — restarting (attempt {restarts+1})", "93")
+            time.sleep(1.0)
+            new_proc = subprocess.Popen(
+                cmd, cwd=ROOT,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=_ENV,
+            )
+            restart_counts[new_proc.pid] = restarts + 1
+            procs[idx] = new_proc
+            threading.Thread(target=_stream, args=(new_proc, label, color),
+                             daemon=True).start()
+
+    for idx, (port, cmd) in enumerate(cmds.items()):
+        threading.Thread(target=_watchdog, args=(idx, cmd, port),
+                         daemon=True).start()
+
+    # ── Step 6: Ctrl-C handler ────────────────────────────────────────────────
+    global _shutdown_flag
+    _shutdown_flag = False
+
     def _shutdown(sig, frame):
-        print("\n\033[90mShutting down…\033[0m")
+        global _shutdown_flag
+        _shutdown_flag = True
+        _log("\nShutting down ...", "90")
         for p in procs:
             try:
                 p.terminate()
             except Exception:
                 pass
+        # Also make sure the ports are freed for next run
+        time.sleep(0.3)
+        for port in _PORTS:
+            if _port_in_use(port):
+                _kill_port(port)
         sys.exit(0)
 
     signal.signal(signal.SIGINT,  _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    # Keep main thread alive
-    for p in procs:
-        p.wait()
+    # Keep alive
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        _shutdown(None, None)
 
+
+_shutdown_flag = False
 
 if __name__ == "__main__":
     launch()

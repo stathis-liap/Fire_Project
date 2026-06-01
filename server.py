@@ -66,12 +66,13 @@ from pipeline.hindcast_optimizer import (
     GeoGrid,
     fetch_weather_hourly,
 )
+from fire_info_panel import FireInfoPanel
 
 HOST = "localhost"
 PORT = 8765
 DEFAULT_STEPS_PER_SEND = 5
 STEP_SLEEP_S           = 0.01
-MIN_FRAME_INTERVAL_S   = 0.05   # 50 ms minimum between frame sends
+MIN_FRAME_INTERVAL_S   = 0.09   # 90 ms minimum between frame sends (~11 FPS)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -698,6 +699,8 @@ async def _handle(websocket):
     geojson_veg = _fuel_map_to_geojson(land, geo_grid, rows, cols)
     log.info("Vegetation GeoJSON: %d features", len(geojson_veg["features"]))
 
+    fire_info = FireInfoPanel()
+
     # Send init_ack
     await send({
         "type":             "init_ack",
@@ -724,6 +727,7 @@ async def _handle(websocket):
             f"{skipped_ignitions} skipped (non-burnable urban/water). Starting..."
         ),
     })
+    await send(fire_info.init_started(rows, cols, cell_m))
 
     # Shared state for concurrent tasks
     ctrl = {
@@ -768,6 +772,7 @@ async def _handle(websocket):
                     n = _apply_firebreak(land, sim, geo_grid, iv.get("points", []))
                     await send({"type": "status",
                                 "message": f"Firebreak applied: {n} cells cleared."})
+                    await send(fire_info.intervention("firebreak", n))
 
                 elif action == "water_drop":
                     n = _apply_water_drop(land, sim, geo_grid,
@@ -775,6 +780,7 @@ async def _handle(websocket):
                                           float(iv.get("radius_m", 435.0)), cell_m)
                     await send({"type": "status",
                                 "message": f"Water drop: {n} cells affected."})
+                    await send(fire_info.intervention("water_drop", n))
 
             if ctrl["paused"]:
                 await asyncio.sleep(0.1)
@@ -797,14 +803,21 @@ async def _handle(websocket):
                 apply_weather_to_landscape(land, w_upd)
                 sim._precompute_ros_grid()
                 log.info("Hour %d weather update applied", current_hour)
-                await send({
+                weather_msg = {
                     "type":             "weather_update",
                     "hour":             current_hour,
                     "wind_speed_ms":    round(float(hrow.wind_speed_ms),     2),
                     "wind_direction":   round(float(hrow.wind_direction),     1),
                     "temperature_c":    round(float(hrow.temperature_c),     1),
                     "relative_humidity":round(float(hrow.relative_humidity), 1),
-                })
+                }
+                await send(weather_msg)
+                await send(fire_info.weather_update(
+                    weather_msg["wind_speed_ms"],
+                    weather_msg["wind_direction"],
+                    weather_msg["temperature_c"],
+                    weather_msg["relative_humidity"],
+                ))
 
             # Run simulation steps
             for _ in range(ctrl["steps_per_send"]):
@@ -813,6 +826,8 @@ async def _handle(websocket):
 
             burned             = int((sim.state == 2).sum())
             active             = int((sim.state == 1).sum())
+            burned_ha          = round(_ha(burned, cell_m), 2)
+            active_ha          = round(_ha(active, cell_m), 2)
             simulated_minutes  = step * sim.dt
             wall_clock_minutes = round(ignition_wall_hour * 60 + simulated_minutes, 1)
 
@@ -837,8 +852,8 @@ async def _handle(websocket):
                     "step":                   step,
                     "geojson_burning":        gjb,
                     "geojson_burned":         gjd,
-                    "burned_ha":              round(_ha(burned, cell_m), 2),
-                    "active_ha":              round(_ha(active, cell_m), 2),
+                    "burned_ha":              burned_ha,
+                    "active_ha":              active_ha,
                     "minutes_since_ignition": round(simulated_minutes, 1),
                     "wall_clock_minutes":     wall_clock_minutes,
                     "ros_N":                  round(ros_n, 2),
@@ -846,6 +861,13 @@ async def _handle(websocket):
                     "ros_S":                  round(ros_s, 2),
                     "ros_W":                  round(ros_w, 2),
                 })
+                for ev in fire_info.process_frame(
+                    burned_ha=burned_ha,
+                    active_ha=active_ha,
+                    minutes_since_ignition=round(simulated_minutes, 1),
+                    ros={"N": ros_n, "E": ros_e, "S": ros_s, "W": ros_w},
+                ):
+                    await send(ev)
                 last_send_time = now
 
             await asyncio.sleep(STEP_SLEEP_S)
@@ -874,6 +896,7 @@ async def _handle(websocket):
             "count":  len(history_frames),
             "frames": history_frames,
         })
+        await send(fire_info.simulation_completed(len(history_frames)))
 
     # Listener task
     async def listen_interventions():
@@ -923,7 +946,7 @@ async def _handle(websocket):
 
     done, pending = await asyncio.wait(
         [sim_task, listen_task],
-        return_when=asyncio.FIRST_COMPLETED,
+        return_when=asyncio.ALL_COMPLETED,
     )
 
     for t in pending:
