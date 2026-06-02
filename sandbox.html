@@ -3183,7 +3183,7 @@
       } else if (msg.type === "status") {
         setStatus(msg.message, "info");
         _dbg("Status: " + msg.message, "#a6adc8");
-        if (msg.message && msg.message.startsWith("Scrubbing")) {
+        if (msg.paused || (msg.message && msg.message.startsWith("Scrubbing"))) {
           document.getElementById("btn-pause").style.display  = "none";
           document.getElementById("btn-resume").style.display = "block";
         }

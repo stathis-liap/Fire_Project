@@ -932,8 +932,12 @@ async def _handle(websocket):
     await send(fire_info.init_started(rows, cols, cell_m))
 
     # ── Shared control state ──────────────────────────────────────────────────
+    # Start paused for "best_params_sim" so the user can inspect the fire at
+    # the elapsed-hours snapshot before choosing to continue.
+    _start_paused = (optimizer_mode == "best_params_sim")
+
     ctrl = {
-        "paused":         False,
+        "paused":         _start_paused,
         "stop":           False,
         "steps_per_send": DEFAULT_STEPS_PER_SEND,
     }
@@ -945,6 +949,32 @@ async def _handle(websocket):
         step           = 0
         last_hour      = -1
         last_send_time = 0.0
+
+        # If started paused (best_params_sim mode), send a single snapshot
+        # frame so the client can render the fire at the elapsed-hours point,
+        # then wait for the user to press Resume.
+        if _start_paused:
+            _burned  = int((sim.state == 2).sum())
+            _active  = int((sim.state == 1).sum())
+            _mins    = round(elapsed_hours_opt * 60.0, 1)
+            _wall    = round(ignition_wall_hour * 60.0 + _mins, 1)
+            _gjb, _gjd = _state_to_geojson(sim.state, geo_grid, rows, cols)
+            await send({
+                "type":                   "frame",
+                "step":                   0,
+                "geojson_burning":        _gjb,
+                "geojson_burned":         _gjd,
+                "burned_ha":              round(_ha(_burned, cell_m), 2),
+                "active_ha":              round(_ha(_active, cell_m), 2),
+                "minutes_since_ignition": _mins,
+                "wall_clock_minutes":     _wall,
+                "ros_N": 0.0, "ros_E": 0.0, "ros_S": 0.0, "ros_W": 0.0,
+            })
+            await send({
+                "type":    "status",
+                "message": f"Fire at {elapsed_hours_opt:.1f}h mark — press Resume to continue.",
+                "paused":  True,
+            })
 
         while not ctrl["stop"]:
             # Drain interventions
