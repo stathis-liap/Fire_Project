@@ -33,6 +33,29 @@ def _compass_bearing(deg: float) -> str:
     return dirs[int((deg + 22.5) / 45) % 8]
 
 
+def _line_hits_mask(mask: np.ndarray, r0: int, c0: int, r1: int, c1: int) -> bool:
+    """Return True if the raster line between two cells crosses a masked cell."""
+    dr = abs(r1 - r0)
+    dc = abs(c1 - c0)
+    step_r = 1 if r0 < r1 else -1
+    step_c = 1 if c0 < c1 else -1
+    err = dr - dc
+
+    while True:
+        if 0 <= r0 < mask.shape[0] and 0 <= c0 < mask.shape[1] and mask[r0, c0]:
+            return True
+        if r0 == r1 and c0 == c1:
+            break
+        err2 = err * 2
+        if err2 > -dc:
+            err -= dc
+            r0 += step_r
+        if err2 < dr:
+            err += dr
+            c0 += step_c
+    return False
+
+
 class CellularAutomataFire:
     """
     Fully Vectorised, Deterministic Rothermel CA Fire Spread Model.
@@ -69,6 +92,8 @@ class CellularAutomataFire:
         self._ignition_step    = np.full((rows, cols), -1, dtype=np.int32)
         self._ignition_sources: dict = {}   # (r, c) -> list of source dicts
         self._sim_step         = 0
+        # Transient list of blocked encounter events detected during step()
+        self._blocked_encounters = []  # list of (r, c, dir_index)
 
         # Optimizer-tunable physics parameters
         self._ignition_threshold  = 1.0   # heat accumulation needed to ignite
@@ -347,12 +372,10 @@ class CellularAutomataFire:
         # 1. Burn timer countdown
         burning_mask = (self.state == 1)
         if self.blocked_mask.any():
-            blocked_burning = burning_mask & self.blocked_mask
-            if blocked_burning.any():
-                self.state[blocked_burning] = 0
-                self.burn_timer[blocked_burning] = 0
-                self.ignition_fraction[blocked_burning] = 0.0
-                burning_mask[blocked_burning] = False
+            self.state[self.blocked_mask] = 0
+            self.burn_timer[self.blocked_mask] = 0
+            self.ignition_fraction[self.blocked_mask] = 0.0
+            burning_mask[self.blocked_mask] = False
         self.burn_timer[burning_mask] -= 1
 
         burned_out = burning_mask & (self.burn_timer <= 0)
@@ -375,6 +398,13 @@ class CellularAutomataFire:
 
         for i, (dr, dc) in enumerate(self._neighbors):
             burning_neighbors = shift_array(burning_mask, dr, dc)
+            # Detect burning neighbors adjacent to blocked cells (firebreak hit)
+            blocked_threatened = burning_neighbors & (self.state == 0) & self.blocked_mask
+            if blocked_threatened.any():
+                rr, cc = np.where(blocked_threatened)
+                for r_hit, c_hit in zip(rr.tolist(), cc.tolist()):
+                    # record encounter: cell that is blocked and direction index of source
+                    self._blocked_encounters.append((int(r_hit), int(c_hit), int(i)))
             threatened = burning_neighbors & unburned_mask
             if not threatened.any():
                 continue
@@ -814,11 +844,26 @@ class CellularAutomataFire:
 
         in_bounds = ((land_r >= 0) & (land_r < rows) &
                      (land_c >= 0) & (land_c < cols))
+        br = br[in_bounds]
+        bc = bc[in_bounds]
         land_r = land_r[in_bounds]
         land_c = land_c[in_bounds]
 
         combustible = unburned_mask[land_r, land_c]
+        br = br[combustible]
+        bc = bc[combustible]
         land_r = land_r[combustible]
         land_c = land_c[combustible]
+
+        if self.blocked_mask.any() and land_r.size:
+            not_crossing_firebreak = np.array([
+                not _line_hits_mask(self.blocked_mask, int(sr), int(sc), int(lr), int(lc))
+                for sr, sc, lr, lc in zip(br, bc, land_r, land_c)
+            ], dtype=bool)
+            land_r = land_r[not_crossing_firebreak]
+            land_c = land_c[not_crossing_firebreak]
+
+        if land_r.size == 0:
+            return
 
         np.add.at(self.ignition_fraction, (land_r, land_c), 0.5)

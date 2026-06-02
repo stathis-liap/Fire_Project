@@ -22,6 +22,7 @@ Then open: **http://localhost:8000/sandbox.html**
 
 ## Latest updates
 
+- Cleaned `requirements.txt` by removing the unused `scikit-image` dependency.
 - Added `fire_info_panel.py` to centralize fire event generation in the backend.
 - Updated `server.py` to emit structured `fire_event` messages for simulation start, weather, interventions, fire progress, slowdown, and completion.
 - Updated `sandbox.html` to render `fire_event` messages in the footer panel, limit the visible list to 3 entries, auto-scroll, and support collapse/expand behavior.
@@ -119,7 +120,7 @@ The project also supports a live 3D simulation mode from the **🧊 3D View** bu
 | `sandbox.html` | Updated 3D popup sizes, fire event panel, collapse behavior |
 | `mesh_api.py` | 3D terrain / satellite texture backend API |
 | `main.py` | Launcher for the local HTTP + WebSocket + mesh API stack |
-| `requirements.txt` | Install dependencies for Flask, Plotly, rasterio, and mapping tools |
+| `requirements.txt` | Install runtime dependencies for NumPy/SciPy, Flask, WebSockets, rasterio, PyVista, mapping tools, and optional drone vision extras |
 
 ---
 

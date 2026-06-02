@@ -11,4 +11,7 @@ rasterio>=1.2.0
 shapely>=1.7.0
 pyproj>=3.1.0
 requests>=2.26.0
-scikit-image>=0.18.0
+# Optional / extras used by auxiliary components
+opencv-python>=4.5.0
+ultralytics>=8.0.0
+geopandas>=0.10.0

@@ -81,24 +81,33 @@
     .row .unit { font-size: 10px; color: #585b70; margin-left: 4px; min-width: 22px; }
 
     /* ── Mode buttons ────────────────────────────────────────────────────── */
-    #mode-toggle { display: flex; gap: 3px; margin-bottom: 6px; flex-wrap: wrap; }
+    #mode-toggle { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
     #mode-toggle button {
-      flex: 1; padding: 5px 2px; font-size: 10px;
+      flex: 1 1 calc(33.333% - 8px);
+      max-width: calc(33.333% - 8px);
+      padding: 6px 4px; font-size: 10px;
       border: 1px solid #313244; border-radius: 6px;
       background: #1e1e2e; color: #a6adc8;
       cursor: pointer; transition: background 0.15s, color 0.15s; white-space: nowrap;
-      min-width: 44px;
+      min-width: 74px;
+      text-align: center;
+    }
+    #mode-toggle button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
     }
     #mode-toggle button.active-cursor      { background: #cba6f7; border-color: #cba6f7; color: #1e1e2e; font-weight: 600; }
     #mode-toggle button.active-ignite      { background: #f38ba8; border-color: #f38ba8; color: #1e1e2e; font-weight: 600; }
     #mode-toggle button.active-water       { background: #89dceb; border-color: #89dceb; color: #1e1e2e; font-weight: 600; }
     #mode-toggle button.active-containment { background: #f9e2af; border-color: #f9e2af; color: #1e1e2e; font-weight: 600; }
     #mode-toggle button.active-mask        { background: #a6e3a1; border-color: #a6e3a1; color: #1e1e2e; font-weight: 600; }
+    #mode-toggle button.active-firebreak   { background: #f5c2e7; border-color: #f5c2e7; color: #1e1e2e; font-weight: 600; }
     .map-cursor-cursor      { cursor: default; }
     .map-cursor-ignite      { cursor: crosshair; }
     .map-cursor-water       { cursor: none; }
     .map-cursor-containment { cursor: cell; }
     .map-cursor-mask        { cursor: crosshair; }
+    .map-cursor-firebreak   { cursor: crosshair; }
 
     /* ── Optimizer section ───────────────────────────────────────────────── */
     .opt-row { display:flex; gap:6px; align-items:center; margin-bottom:4px; }
@@ -273,9 +282,33 @@
     }
 
     /* ── Tool controls (inside panel) ───────────────────────────────────── */
-    #brush-controls, #containment-controls {
+    #brush-controls, #containment-controls, #firebreak-controls {
       display: none; border-top: 1px solid #313244; margin-top: 6px; padding-top: 6px;
     }
+    .btn-small {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 60px; padding: 6px 8px; margin-right: 4px;
+      font-size: 10px; font-weight: 700;
+      border-radius: 6px; border: 1px solid #313244;
+      background: #1e1e2e; color: #a6adc8; cursor: pointer;
+    }
+    .btn-small:last-child { margin-right: 0; }
+    .btn-small:disabled { opacity: 0.4; cursor: not-allowed; }
+    .fb-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin-bottom: 8px; }
+    .firebreak-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 8px; }
+    .firebreak-header .btn-small { margin: 0; }
+    #firebreak-color { width: 34px; height: 32px; border-radius: 6px; border: 1px solid #313244; background: transparent; cursor: pointer; }
+    #firebreak-color:focus { outline: none; box-shadow: 0 0 0 2px rgba(203,166,247,0.25); }
+    #firebreak-zone-meta { font-size: 10px; color: #a6adc8; }
+    #firebreak-zone-list { margin-top: 6px; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 4px; }
+    .fb-zone-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      background: #181825; color: #cdd6f4; border: 1px solid #313244;
+      border-radius: 6px; padding: 6px 8px; font-size: 10px; cursor: pointer;
+      text-align: center; white-space: normal;
+    }
+    .fb-zone-btn.active { background: #cba6f7; border-color: #cba6f7; color: #1e1e2e; }
+    .fb-empty { color: #585b70; font-size: 10px; }
     .ctrl-row { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
     .ctrl-row label { font-size: 10.5px; color: #a6adc8; flex: 1; }
     .ctrl-row input[type="range"] { flex: 1; accent-color: #89dceb; cursor: pointer; }
@@ -858,6 +891,7 @@
       <button id="btn-water"                              onclick="setMode('water')">💧 Water</button>
       <button id="btn-containment"                        onclick="setMode('containment')">🚒 Contain</button>
       <button id="btn-mask"                               onclick="setMode('mask')">🎯 Mask</button>
+      <button id="btn-firebreak"                          onclick="setMode('firebreak')">🪓 Firebreak</button>
     </div>
     <button class="btn" id="btn-apply-containment" onclick="applyContainmentLine()" style="background:#f9e2af;color:#1e1e2e;display:none">Deploy Containment Line</button>
     <button class="btn" id="btn-close-mask"        onclick="closeMaskPolygon()">✔ Close Polygon</button>
@@ -925,6 +959,38 @@
                oninput="document.getElementById('ct-decay-val').textContent=(+this.value>0?(+this.value).toFixed(1)+'h':'∞')">
         <span class="cval" id="ct-decay-val">2.0h</span>
       </div>
+    </div>
+
+    <div id="firebreak-controls">
+      <div class="firebreak-header">
+        <div class="sect-label">Firebreak</div>
+        <button class="btn btn-small" onclick="startFirebreakDesign()">➕ New Zone</button>
+      </div>
+      <div class="fb-row">
+        <button class="btn btn-small" id="btn-firebreak-design" onclick="startFirebreakDesign()">🛠 Design</button>
+        <button class="btn btn-small" id="btn-firebreak-apply" onclick="applyFirebreak()">🚧 Apply</button>
+      </div>
+      <div class="fb-row">
+        <button class="btn btn-small" id="btn-firebreak-save" onclick="saveFirebreak()">💾 Save</button>
+        <button class="btn btn-small" id="btn-firebreak-load" onclick="loadFirebreak()">📂 Load</button>
+      </div>
+      <div class="fb-row">
+        <button class="btn btn-small" id="btn-firebreak-undo" onclick="undoFirebreak()">↩ Undo</button>
+        <button class="btn btn-small" id="btn-firebreak-redo" onclick="redoFirebreak()">↪ Redo</button>
+      </div>
+      <div class="fb-row">
+        <button class="btn btn-small" id="btn-firebreak-clear-all" onclick="clearFirebreakZones()">✕ Clear</button>
+        <div class="ctrl-row" style="margin:0;">
+          <label for="firebreak-color">Color</label>
+          <input type="color" id="firebreak-color" value="#cba6f7" onchange="setFirebreakColor(this.value)">
+        </div>
+      </div>
+      <div id="firebreak-zone-meta">
+        <div id="firebreak-current">No active zone. Click Design to begin.</div>
+        <div class="fb-hint">Left-click map to add points; drag points to move; right-click a point to edit or delete. Hold Shift and left-drag to move the map.</div>
+        <div id="firebreak-zone-list"></div>
+      </div>
+      <input type="file" id="firebreak-file-input" accept=".csv,.txt" style="display:none" onchange="handleFirebreakFile(event)">
     </div>
 
     <div class="sect-label">Ignition Points (<span id="ign-count">0</span>)</div>
@@ -1070,6 +1136,9 @@
     var SRC_VEGETATION  = "vegetation-src";
     var SRC_MASK        = "truth-mask-src";
     var SRC_MASK_PREV   = "truth-mask-preview-src";
+    var SRC_FIREBREAK   = "firebreak-src";
+    var SRC_FIREBREAK_FILL = "firebreak-fill-src";
+    var SRC_FIREBREAK_MARKERS = "firebreak-markers-src";
     var SRC_ENSEMBLE    = "ensemble-src";
     var TILE_URL        = "https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}.jpg?api_key=42d95708-abc1-48a0-882c-c13e72274056";
     var WS_URL          = "ws://localhost:8765";
@@ -1090,6 +1159,17 @@
     // Containment line state (replaces firebreak + suppression)
     var containmentPoints        = [];   // in-progress polyline [lng, lat]
     var committedContainmentLines= [];   // [{points, strength, createdAtMs, decayMs, effectRadius}]
+
+    // Firebreak design state
+    var firebreakZones           = [];   // [{id, label, color, points:[lng,lat], closed:false}]
+    var firebreakActiveZone      = null;
+    var firebreakStage           = "idle"; // idle | design | edit
+    var firebreakColor           = "#cba6f7";
+    var firebreakDrag            = null;
+    var firebreakSuppressClick   = false;
+    var firebreakShiftCursor     = false;
+    var firebreakUndoStack       = [];
+    var firebreakRedoStack       = [];
 
     // Grid dimensions — received from init_ack, used for client-side rasterization
     var _simRows = 0;
@@ -1252,6 +1332,7 @@
       container: "map",
       style: {
         version: 8,
+        glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
         sources: {
           satellite: {
             type: "raster",
@@ -1296,6 +1377,9 @@
       map.addSource(SRC_WATER,      { type: "geojson", data: emptyFC() });
       map.addSource(SRC_CONTAINMENT,{ type: "geojson", data: emptyFC() });
       map.addSource(SRC_CONTAINMENT_MARKERS, { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_FIREBREAK, { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_FIREBREAK_FILL, { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_FIREBREAK_MARKERS, { type: "geojson", data: emptyFC() });
       map.addSource(SRC_RECT_SEL,   { type: "geojson", data: emptyFC() });
       map.addSource(SRC_VEGETATION, { type: "geojson", data: emptyFC() });
 
@@ -1323,6 +1407,32 @@
           "text-opacity": ["get", "opacity"],
         },
       });
+      map.addLayer({
+        id: "firebreak-layer", type: "line", source: SRC_FIREBREAK,
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
+        },
+        paint: {
+          "line-color": ["get", "color"],
+          "line-width": 3,
+          "line-opacity": 0.9
+        },
+      });
+      map.addLayer({
+        id: "firebreak-fill", type: "fill", source: SRC_FIREBREAK_FILL,
+        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.12 },
+      });
+      map.addLayer({
+        id: "firebreak-markers", type: "circle", source: SRC_FIREBREAK_MARKERS,
+        paint: {
+          "circle-color": ["get", "color"],
+          "circle-radius": 5,
+          "circle-stroke-width": 1.5,
+          "circle-stroke-color": "#1e1e2e",
+        },
+      });
+      map.moveLayer("firebreak-layer", "firebreak-markers");
       // Rect selection layer (dashed purple)
       map.addLayer({
         id: "rect-sel-layer", type: "line", source: SRC_RECT_SEL,
@@ -1990,7 +2100,7 @@
       // Cancel incomplete lasso when switching away
 
       // Update button active classes
-      ["btn-cursor", "btn-ignite", "btn-water", "btn-containment", "btn-mask"].forEach(function (id) {
+      ["btn-cursor", "btn-ignite", "btn-water", "btn-containment", "btn-mask", "btn-firebreak"].forEach(function (id) {
         var el = document.getElementById(id);
         if (el) el.className = "";
       });
@@ -2000,6 +2110,7 @@
         water:       "active-water",
         containment: "active-containment",
         mask:        "active-mask",
+        firebreak:   "active-firebreak",
       }[m] || "";
       var btn = document.getElementById("btn-" + m);
       if (btn && activeClass) btn.className = activeClass;
@@ -2007,7 +2118,7 @@
       // Map cursor
       var canvas = map.getCanvas();
       canvas.classList.remove("map-cursor-cursor", "map-cursor-ignite",
-                              "map-cursor-water", "map-cursor-containment", "map-cursor-mask");
+                              "map-cursor-water", "map-cursor-containment", "map-cursor-mask", "map-cursor-firebreak");
       canvas.classList.add("map-cursor-" + m);
 
       // Map interaction: only cursor mode allows dragging
@@ -2024,6 +2135,9 @@
         (m === "water") ? "block" : "none";
       document.getElementById("containment-controls").style.display =
         (m === "containment") ? "block" : "none";
+      document.getElementById("firebreak-controls").style.display =
+        (m === "firebreak") ? "block" : "none";
+      if (m === "firebreak") _updateFirebreakControls();
       var applyCtBtn = document.getElementById("btn-apply-containment");
       if (applyCtBtn) applyCtBtn.style.display =
         (m === "containment" && containmentPoints.length >= 2) ? "block" : "none";
@@ -2052,9 +2166,15 @@
         setStatus("Water — click or drag to paint water. Adjust brush in controls below.", "info");
       else if (m === "containment")
         setStatus("Containment — click to add waypoints, then click Deploy button.", "info");
+      else if (m === "firebreak")
+        setStatus("Firebreak — design or edit zones, then Save or Apply.", "info");
     }
 
     function onMapClick(e) {
+      if (firebreakSuppressClick) {
+        firebreakSuppressClick = false;
+        return;
+      }
       if (e.originalEvent && e.originalEvent.ctrlKey) return;
       var lat = e.lngLat.lat, lng = e.lngLat.lng;
       if (mode === "cursor") {
@@ -2073,6 +2193,9 @@
         setStatus("Containment waypoint " + containmentPoints.length + " added.", "info");
         var applyCtBtn = document.getElementById("btn-apply-containment");
         if (applyCtBtn && containmentPoints.length >= 2) applyCtBtn.style.display = "block";
+      } else if (mode === "firebreak") {
+        if (e.originalEvent && e.originalEvent.shiftKey) return;
+        _firebreakAddPoint(lat, lng);
       } else if (mode === "mask") {
         if (maskCommitted) return; // polygon already closed
         maskPoints.push([lng, lat]);
@@ -2209,6 +2332,369 @@
       if (applyCtBtn) applyCtBtn.style.display = "none";
       redrawContainmentLines(false);
       setStatus("Containment line deployed — " + committedContainmentLines.length + " active.", "ok");
+    }
+
+    function _firebreakSnapshot() {
+      return JSON.parse(JSON.stringify({
+        zones: firebreakZones,
+        activeZone: firebreakActiveZone,
+        stage: firebreakStage,
+      }));
+    }
+
+    function _pushFirebreakHistory() {
+      firebreakUndoStack.push(_firebreakSnapshot());
+      if (firebreakUndoStack.length > 50) firebreakUndoStack.shift();
+      firebreakRedoStack = [];
+      _updateFirebreakControls();
+    }
+
+    function _restoreFirebreakSnapshot(snapshot) {
+      firebreakZones = snapshot.zones || [];
+      firebreakActiveZone = snapshot.activeZone || (firebreakZones.length ? firebreakZones[0].id : null);
+      firebreakStage = snapshot.stage || "idle";
+      _updateFirebreakControls();
+      redrawFirebreakZones();
+    }
+
+    function _firebreakActive() {
+      return firebreakZones.find(function (zone) { return zone.id === firebreakActiveZone; });
+    }
+
+    function _firebreakAddPoint(lat, lng) {
+      var zone = _firebreakActive();
+      if (!zone) {
+        startFirebreakDesign();
+        zone = _firebreakActive();
+      }
+      if (!zone) return;
+      _pushFirebreakHistory();
+      // Connect to previous point by pushing the new point; redraw will connect
+      zone.points.push([lng, lat]);
+      _updateFirebreakControls();
+      redrawFirebreakZones();
+      setStatus("Firebreak point added — " + zone.points.length + " points in " + zone.label + ".", "ok");
+    }
+
+    function startFirebreakDesign() {
+      _pushFirebreakHistory();
+      var label = "Zone " + (firebreakZones.length + 1);
+      var zone = { id: Date.now(), label: label, color: firebreakColor, points: [] };
+      firebreakZones.push(zone);
+      firebreakActiveZone = zone.id;
+      firebreakStage = "design";
+      _updateFirebreakControls();
+      setStatus("Design mode active. Click the map to place a new firebreak zone.", "info");
+    }
+
+    function selectFirebreakZone(id) {
+      var zone = firebreakZones.find(function (zone) { return zone.id === id; });
+      if (!zone) return;
+      firebreakActiveZone = id;
+      firebreakStage = "edit";
+      _updateFirebreakControls();
+      if (zone.points && zone.points.length) {
+        if (zone.points.length > 1) {
+          var lats = zone.points.map(function (p){ return p[1]; });
+          var lngs = zone.points.map(function (p){ return p[0]; });
+          var bounds = [[Math.min.apply(null, lngs), Math.min.apply(null, lats)], [Math.max.apply(null, lngs), Math.max.apply(null, lats)]];
+          map.fitBounds(bounds, { padding: 70, maxZoom: 15, duration: 600 });
+        } else {
+          map.easeTo({ center: zone.points[0], zoom: 14, duration: 600 });
+        }
+      }
+      document.getElementById("firebreak-color").value = zone.color || firebreakColor;
+      setStatus("Editing " + zone.label + " — add points, drag markers to move, or right-click a point to delete.", "info");
+    }
+
+    function _updateFirebreakControls() {
+      var anyPoints = firebreakZones.some(function (zone) { return zone.points.length > 0; });
+      var anyValid = firebreakZones.some(function (zone) { return zone.points.length >= 2; });
+      // Save and Apply require at least one valid zone (2+ points)
+      document.getElementById("btn-firebreak-save").disabled = !anyValid;
+      document.getElementById("btn-firebreak-apply").disabled = !anyValid;
+      document.getElementById("btn-firebreak-undo").disabled = firebreakUndoStack.length === 0;
+      document.getElementById("btn-firebreak-redo").disabled = firebreakRedoStack.length === 0;
+      document.getElementById("btn-firebreak-clear-all").disabled = !anyPoints;
+
+      var current = _firebreakActive();
+      var statusText = "No active zone. Click Design to start.";
+      if (current) {
+        statusText = current.points.length
+          ? current.label + " — " + current.points.length + " point(s)."
+          : current.label + " — no points yet.";
+      }
+      document.getElementById("firebreak-current").textContent = statusText;
+
+      var list = firebreakZones.map(function (zone) {
+        var activeClass = zone.id === firebreakActiveZone ? " active" : "";
+        return '<div style="display:flex;gap:6px">'
+             + '<button type="button" class="fb-zone-btn' + activeClass + '" title="Right-click to rename" onclick="selectFirebreakZone(' + zone.id + ')" oncontextmenu="renameFirebreakZone(event,' + zone.id + ')">'
+             + zone.label + ' (' + zone.points.length + ')</button>'
+             + '<button class="btn-small" onclick="toggleZoneClosed(' + zone.id + ')">' + (zone.closed ? '🔒' : '◻︎') + '</button>'
+             + '</div>';
+      }).join("");
+      document.getElementById("firebreak-zone-list").innerHTML = list || '<div class="fb-empty">No zones yet.</div>';
+    }
+
+    function setFirebreakColor(color) {
+      firebreakColor = color;
+      var zone = _firebreakActive();
+      if (!zone) {
+        setStatus("Firebreak color set for next zone.", "info");
+        return;
+      }
+      _pushFirebreakHistory();
+      zone.color = color;
+      redrawFirebreakZones();
+      _updateFirebreakControls();
+      setStatus(zone.label + " color updated.", "ok");
+    }
+
+    function renameFirebreakZone(e, id) {
+      if (e && e.preventDefault) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      var zone = firebreakZones.find(function (z) { return z.id === id; });
+      if (!zone) return;
+      var name = prompt("Rename firebreak zone", zone.label);
+      if (name === null) return;
+      name = name.trim();
+      if (!name) return;
+      _pushFirebreakHistory();
+      zone.label = name;
+      _updateFirebreakControls();
+      setStatus("Zone renamed to " + name + ".", "ok");
+    }
+
+    function toggleZoneClosed(id) {
+      var zone = firebreakZones.find(function (z) { return z.id === id; });
+      if (!zone) return;
+      _pushFirebreakHistory();
+      zone.closed = !zone.closed;
+      redrawFirebreakZones();
+      setStatus(zone.label + (zone.closed ? ' closed.' : ' opened.'), 'info');
+    }
+
+    function removeFirebreakPoint(zoneId, pointIndex) {
+      var zone = firebreakZones.find(function (z) { return z.id === zoneId; });
+      if (!zone || !zone.points || !zone.points.length) return;
+      _pushFirebreakHistory();
+      // Always remove the point and interpolate (do not split into new zones)
+      zone.points.splice(pointIndex, 1);
+      setStatus("Removed point from " + zone.label + ".", "ok");
+      // If zone becomes empty, remove it entirely
+      if (!zone.points.length) {
+        firebreakZones = firebreakZones.filter(function (z) { return z.id !== zoneId; });
+        firebreakActiveZone = firebreakZones.length ? firebreakZones[0].id : null;
+      }
+      _updateFirebreakControls();
+      redrawFirebreakZones();
+    }
+
+    function redrawFirebreakZones() {
+      var lineFeatures = [];
+      var pointFeatures = [];
+      var fillFeatures = [];
+      firebreakZones.forEach(function (zone) {
+        var color = zone.color || firebreakColor;
+        if (zone.points.length >= 2) {
+          for (var i = 1; i < zone.points.length; i++) {
+            lineFeatures.push({
+              type: "Feature",
+              geometry: { type: "LineString", coordinates: [zone.points[i - 1], zone.points[i]] },
+              properties: { color: color }
+            });
+          }
+          if (zone.closed && zone.points.length > 2) {
+            var poly = zone.points.slice();
+            poly.push(zone.points[0]);
+            fillFeatures.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [poly] }, properties: { color: color } });
+            lineFeatures.push({
+              type: "Feature",
+              geometry: { type: "LineString", coordinates: [zone.points[zone.points.length - 1], zone.points[0]] },
+              properties: { color: color }
+            });
+          }
+        }
+        zone.points.forEach(function (point, idx) {
+          pointFeatures.push({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: point },
+            properties: {
+              color: color,
+              zone_id: zone.id,
+              point_index: idx,
+            }
+          });
+        });
+      });
+      var lineFC = { type: "FeatureCollection", features: lineFeatures };
+      var pointFC = { type: "FeatureCollection", features: pointFeatures };
+      var fillFC = { type: 'FeatureCollection', features: fillFeatures };
+      if (map.getSource(SRC_FIREBREAK)) map.getSource(SRC_FIREBREAK).setData(lineFC);
+      if (map.getSource(SRC_FIREBREAK_MARKERS)) map.getSource(SRC_FIREBREAK_MARKERS).setData(pointFC);
+      if (map.getSource(SRC_FIREBREAK_FILL)) map.getSource(SRC_FIREBREAK_FILL).setData(fillFC);
+    }
+
+    async function saveFirebreak() {
+      var validZones = firebreakZones.filter(function (zone) { return zone.points.length >= 2; });
+      if (!validZones.length) {
+        setStatus("Cannot save: add at least one zone with 2+ points.", "err");
+        return;
+      }
+      var suggested = 'firebreak_zones_log_' + new Date().toISOString().replace(/[:\.]/g, '-') + '.txt';
+      var payload = { zones: firebreakZones };
+      var content = JSON.stringify(payload, null, 2);
+
+      // Use File System Access API if available to let user pick location
+      if (window.showSaveFilePicker) {
+        try {
+          var handle = await window.showSaveFilePicker({
+            suggestedName: suggested,
+            types: [{ description: 'Text', accept: { 'text/plain': ['.txt'] } }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(content);
+          await writable.close();
+          setStatus('Firebreak zones saved as ' + (handle.name || suggested) + '.', 'ok');
+          return;
+        } catch (err) {
+          console.warn('Save cancelled or failed:', err);
+          // Fall through to fallback
+        }
+      }
+
+      // Fallback: trigger download (browser will place in Downloads)
+      var filename = suggested;
+      var blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      var link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setStatus('Firebreak zones saved (download) as ' + filename + '.', 'ok');
+    }
+
+    function loadFirebreak() {
+      document.getElementById("firebreak-file-input").value = "";
+      document.getElementById("firebreak-file-input").click();
+    }
+
+    function handleFirebreakFile(event) {
+      var file = event.target.files && event.target.files[0];
+      if (!file) {
+        setStatus("No firebreak file selected.", "info");
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () {
+        try {
+          var text = reader.result;
+          var data;
+          if (file.name.toLowerCase().endsWith(".csv")) {
+            data = _parseFirebreakCSV(text);
+          } else {
+            data = JSON.parse(text);
+          }
+          if (!data || !Array.isArray(data.zones)) {
+            throw new Error("Invalid firebreak file format.");
+          }
+          _pushFirebreakHistory();
+          firebreakZones = data.zones.map(function (zone, index) {
+            return {
+              id: zone.id || Date.now() + index,
+              label: zone.label || "Zone " + (index + 1),
+              color: zone.color || firebreakColor,
+              points: Array.isArray(zone.points) ? zone.points.map(function (pt) {
+                return [Number(pt[0]), Number(pt[1])];
+              }) : []
+            };
+          });
+          firebreakActiveZone = firebreakZones.length ? firebreakZones[0].id : null;
+          firebreakStage = firebreakZones.length ? "edit" : "idle";
+          _updateFirebreakControls();
+          redrawFirebreakZones();
+          setStatus("Firebreak zones loaded. You can edit, save, or apply them now.", "ok");
+        } catch (err) {
+          setStatus("Failed to load firebreak file: " + err.message, "err");
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function _parseFirebreakCSV(text) {
+      var lines = text.trim().split(/\r?\n/).filter(function (line) { return line.trim(); });
+      var headers = lines.shift().split(/,\s*/).map(function (h) { return h.trim().toLowerCase(); });
+      var zones = {};
+      lines.forEach(function (line) {
+        var parts = line.split(/,\s*/);
+        var row = {};
+        headers.forEach(function (h, index) { row[h] = parts[index]; });
+        var id = Number(row.zone_id || row.id || 0) || 0;
+        var lat = Number(row.lat);
+        var lon = Number(row.lon);
+        if (!zones[id]) {
+          zones[id] = { id: id || Date.now() + Object.keys(zones).length, label: row.label || "Zone " + Object.keys(zones).length, points: [] };
+        }
+        if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
+          zones[id].points.push([lon, lat]);
+        }
+      });
+      return { zones: Object.values(zones) };
+    }
+
+    function applyFirebreak() {
+      var validZones = firebreakZones.filter(function (zone) { return zone.points.length >= 2; });
+      if (!validZones.length) {
+        setStatus("Add at least one firebreak with two or more points before applying.", "err");
+        return;
+      }
+      validZones.forEach(function (zone) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: "intervention",
+            action: "firebreak",
+            points: zone.points.map(function (c) { return { lat: c[1], lon: c[0] }; }),
+            label: zone.label,
+            strength: 0.9,
+            effect_radius_m: Math.max(_cellM || 50, 50),
+            water_application: 0,
+            humidity_boost: 0,
+            decay_hours: 0,
+          }));
+        }
+      });
+      setStatus("Firebreak zones applied to the simulation.", "ok");
+    }
+
+    function undoFirebreak() {
+      if (!firebreakUndoStack.length) return;
+      firebreakRedoStack.push(_firebreakSnapshot());
+      var snapshot = firebreakUndoStack.pop();
+      _restoreFirebreakSnapshot(snapshot);
+      setStatus("Undid last firebreak action.", "info");
+    }
+
+    function redoFirebreak() {
+      if (!firebreakRedoStack.length) return;
+      firebreakUndoStack.push(_firebreakSnapshot());
+      var snapshot = firebreakRedoStack.pop();
+      _restoreFirebreakSnapshot(snapshot);
+      setStatus("Redid firebreak action.", "info");
+    }
+
+    function clearFirebreakZones() {
+      if (!firebreakZones.length) return;
+      _pushFirebreakHistory();
+      firebreakZones = [];
+      firebreakActiveZone = null;
+      firebreakStage = "idle";
+      _updateFirebreakControls();
+      redrawFirebreakZones();
+      setStatus("Cleared all firebreak zones.", "info");
     }
 
     // Animate containment line decay (update opacity over real time)
@@ -3426,6 +3912,8 @@
       if (map.getSource(SRC_WATER))               map.getSource(SRC_WATER).setData(emptyFC());
       if (map.getSource(SRC_CONTAINMENT))         map.getSource(SRC_CONTAINMENT).setData(emptyFC());
       if (map.getSource(SRC_CONTAINMENT_MARKERS)) map.getSource(SRC_CONTAINMENT_MARKERS).setData(emptyFC());
+      if (map.getSource(SRC_FIREBREAK))           map.getSource(SRC_FIREBREAK).setData(emptyFC());
+      if (map.getSource(SRC_FIREBREAK_MARKERS))   map.getSource(SRC_FIREBREAK_MARKERS).setData(emptyFC());
       if (map.getSource(SRC_RECT_SEL))            map.getSource(SRC_RECT_SEL).setData(emptyFC());
       _simRows = 0; _simCols = 0;
       _microclimateSummary = null;
@@ -3518,9 +4006,35 @@
         return;
       }
 
+      // Shift+left-click in Firebreak mode temporarily enables map pan without
+      // switching into Cursor mode.
+      if (mode === "firebreak" && e.shiftKey) {
+        firebreakShiftCursor = true;
+        firebreakSuppressClick = true;
+        map.dragPan.enable();
+        setStatus("Move the map. Release Shift to continue drawing the firebreak.", "info");
+        return;
+      }
+
       // Water brush start
       if (mode === "water") {
         _waterBrushDown = true;
+      }
+      if (mode === "firebreak") {
+        var rect = map.getCanvas().getBoundingClientRect();
+        var hit = map.queryRenderedFeatures([e.clientX - rect.left, e.clientY - rect.top], { layers: ["firebreak-markers"] });
+        if (hit && hit.length) {
+          var feature = hit[0];
+          firebreakDrag = {
+            zoneId: Number(feature.properties.zone_id),
+            pointIndex: Number(feature.properties.point_index),
+          };
+          firebreakSuppressClick = true;
+          _pushFirebreakHistory();
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          return;
+        }
       }
     }, { capture: true });
 
@@ -3528,6 +4042,18 @@
       _waterBrushDown= false;
       _lastBrushLat  = null;    // reset brush interpolation anchor
       _lastBrushLng  = null;
+
+      if (firebreakDrag) {
+        firebreakDrag = null;
+        firebreakSuppressClick = false;
+      }
+      if (firebreakShiftCursor) {
+        firebreakShiftCursor = false;
+        if (mode === "firebreak") map.dragPan.disable();
+        window.setTimeout(function () {
+          firebreakSuppressClick = false;
+        }, 300);
+      }
 
       // Finish rect selection
       if (_rectSelecting && _rectStart && _rectEnd) {
@@ -3537,9 +4063,30 @@
       }
     });
 
+    document.addEventListener("keyup", function (e) {
+      if (!firebreakShiftCursor || e.key !== "Shift") return;
+      firebreakShiftCursor = false;
+      if (mode === "firebreak") map.dragPan.disable();
+      window.setTimeout(function () {
+        firebreakSuppressClick = false;
+      }, 300);
+      setStatus("Firebreak mode restored. Left-click to add the next point.", "info");
+    });
+
     map.on("mousemove", function (e) {
       var oe = e.originalEvent;
       if (oe) _updateBrushRing(oe.clientX, oe.clientY);
+
+      if (firebreakDrag && mode === "firebreak") {
+        var zone = firebreakZones.find(function (z) { return z.id === firebreakDrag.zoneId; });
+        if (zone && zone.points && zone.points[firebreakDrag.pointIndex]) {
+          zone.points[firebreakDrag.pointIndex] = [e.lngLat.lng, e.lngLat.lat];
+          redrawFirebreakZones();
+          _updateFirebreakControls();
+          setStatus(zone.label + " point moved.", "info");
+          return;
+        }
+      }
 
       // Water brush painting — distance-based interpolation for gapless strokes
       if (_waterBrushDown && mode === "water") {
@@ -3644,40 +4191,101 @@
   </div>
 
   <script>
-  // Right-click -> request matplotlib mesh images and show in full-screen modal
-  map.on('contextmenu', function (e) {
-    var lat = e.lngLat.lat, lon = e.lngLat.lng;
-    var bboxDeg = Math.min(parseFloat(document.getElementById('bbox').value) || 0.025, 0.04);
-    setStatus('Requesting 3D mesh…', 'info');
-    var container = document.getElementById('mesh-canvas-container');
-    container.innerHTML = '<div style="color:#a6adc8;font-size:13px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">Generating plots…</div>';
-    document.getElementById('mesh-modal').style.display = 'block';
-    fetch('http://localhost:5000/mesh', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ lat: lat, lon: lon, bbox_deg: bboxDeg })
-    }).then(function(r){ return r.json(); }).then(function(data){
-      if (!data || !data.plotly_dem) { setStatus('Invalid mesh response', 'err'); return; }
-      container.innerHTML = '';
-      var cfg = { responsive: true, displayModeBar: false, scrollZoom: true, displaylogo: false };
-      var ids = [
-        ['modal-plot-0', data.plotly_dem],
-        ['modal-plot-1', data.plotly_pts],
-        ['modal-plot-2', data.plotly_tri],
-      ];
-      ids.forEach(function (p) {
-        var d = document.createElement('div');
-        d.id = p[0]; d.style.cssText = 'flex:1;height:100%;min-width:0;';
-        container.appendChild(d);
-        var fig = JSON.parse(p[1]);
-        Plotly.react(d, fig.data, fig.layout, cfg);
-      });
-      setStatus('3D mesh ready — close to return to map.', 'ok');
-    }).catch(function(err){
-      console.error(err);
-      container.innerHTML = '<div style="color:#f38ba8;font-size:13px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">Error: ' + err + '<br><small>(run: python mesh_api.py)</small></div>';
-      setStatus('Mesh request failed: ' + err, 'err');
+  // Firebreak marker context menu: show Edit / Delete options on right-click
+  (function(){
+    // Create context menu element
+    var fbMenu = document.createElement('div');
+    fbMenu.id = 'fb-context-menu';
+    fbMenu.style.position = 'absolute';
+    fbMenu.style.display = 'none';
+    fbMenu.style.zIndex = 2200;
+    fbMenu.style.background = 'linear-gradient(180deg,#0f1720,#0b0c10)';
+    fbMenu.style.border = '1px solid rgba(137,180,250,0.12)';
+    fbMenu.style.padding = '6px';
+    fbMenu.style.borderRadius = '6px';
+    fbMenu.style.boxShadow = '0 6px 20px rgba(0,0,0,0.6)';
+    fbMenu.style.color = '#cdd6f4';
+    fbMenu.style.fontSize = '13px';
+    fbMenu.innerHTML = '' +
+      '<div style="display:flex;flex-direction:column;gap:6px;min-width:140px">' +
+      '<button id="fb-edit-point" style="padding:6px;border-radius:6px;border:1px solid transparent;background:#11121a;color:inherit;cursor:pointer">Edit point</button>' +
+      '<button id="fb-delete-point" style="padding:6px;border-radius:6px;border:1px solid transparent;background:#11121a;color:#f38ba8;cursor:pointer">Delete point</button>' +
+      '</div>';
+    document.body.appendChild(fbMenu);
+
+    var currentCtx = null; // {zoneId, pointIndex}
+
+    function hideFbMenu() {
+      fbMenu.style.display = 'none';
+      currentCtx = null;
+    }
+    function showFbMenu(x, y, ctx) {
+      currentCtx = ctx;
+      fbMenu.style.left = x + 'px';
+      fbMenu.style.top  = y + 'px';
+      fbMenu.style.display = 'block';
+    }
+
+    document.getElementById('fb-delete-point').addEventListener('click', function(){
+      if (!currentCtx) return hideFbMenu();
+      removeFirebreakPoint(currentCtx.zoneId, currentCtx.pointIndex);
+      hideFbMenu();
     });
-  });
+    document.getElementById('fb-edit-point').addEventListener('click', function(){
+      if (!currentCtx) return hideFbMenu();
+      var zone = firebreakZones.find(function(z){ return z.id === currentCtx.zoneId; });
+      if (!zone) return hideFbMenu();
+      var pt = zone.points[currentCtx.pointIndex];
+      var lat = pt[1].toFixed(6);
+      var lon = pt[0].toFixed(6);
+      var val = prompt('Edit point coordinates (lat,lon)', lat + ',' + lon);
+      if (val !== null) {
+        var parts = val.split(',').map(function(s){ return s.trim(); });
+        var nlat = parseFloat(parts[0]);
+        var nlon = parseFloat(parts[1]);
+        if (!Number.isNaN(nlat) && !Number.isNaN(nlon)) {
+          _pushFirebreakHistory();
+          zone.points[currentCtx.pointIndex] = [nlon, nlat];
+          redrawFirebreakZones();
+          _updateFirebreakControls();
+          setStatus(zone.label + ' point updated.', 'ok');
+        } else {
+          setStatus('Invalid coordinates entered.', 'err');
+        }
+      }
+      hideFbMenu();
+    });
+
+    // Hide menu on any click elsewhere
+    document.addEventListener('click', function(e){
+      if (!fbMenu.contains(e.target)) hideFbMenu();
+    });
+    document.addEventListener('contextmenu', function(e){
+      // allow native menus outside firebreak markers
+      if (!fbMenu.contains(e.target)) {
+        // hide existing menu
+        hideFbMenu();
+      }
+    });
+
+    map.on('contextmenu', function (e) {
+      if (mode !== 'firebreak') return;
+      var hitPoint = e.point;
+      if (!hitPoint && e.originalEvent) {
+        var rect = map.getCanvas().getBoundingClientRect();
+        hitPoint = [e.originalEvent.clientX - rect.left, e.originalEvent.clientY - rect.top];
+      }
+      var hit = map.queryRenderedFeatures(hitPoint, { layers: ['firebreak-markers'] });
+      if (!hit || !hit.length) return;
+      if (e.preventDefault) e.preventDefault();
+      if (e.originalEvent && e.originalEvent.preventDefault) e.originalEvent.preventDefault();
+      var f = hit[0];
+      var screenX = e.originalEvent ? e.originalEvent.clientX : hitPoint.x;
+      var screenY = e.originalEvent ? e.originalEvent.clientY : hitPoint.y;
+      showFbMenu(screenX, screenY, { zoneId: Number(f.properties.zone_id), pointIndex: Number(f.properties.point_index) });
+    });
+
+  })();
 
   function closeMeshModal(){ document.getElementById('mesh-modal').style.display='none'; setStatus('Closed mesh preview.', 'info'); }
   </script>

@@ -490,7 +490,8 @@ def _apply_containment_line(land: Landscape, sim: CellularAutomataFire,
                              cell_m: float,
                              water_application: float = 0.0,
                              humidity_boost: float = 0.0,
-                             decay_hours: float = 0.0) -> int:
+                              decay_hours: float = 0.0,
+                              zone_label: str | None = None) -> int:
     """
     Rasterise a containment polyline and apply graduated damping to the model.
 
@@ -536,6 +537,70 @@ def _apply_containment_line(land: Landscape, sim: CellularAutomataFire,
             effect_radius_cells=effect_radius_cells,
         )
     return 0
+
+
+def _apply_firebreak(land: Landscape, sim: CellularAutomataFire,
+                     geo_grid: GeoGrid,
+                     points: list[dict],
+                     effect_radius_m: float,
+                     cell_m: float,
+                     zone_label: str | None = None) -> int:
+    """Rasterise a firebreak (hard barrier) and apply as blocked_mask to sim.
+
+    Returns number of cells marked as blocked.
+    """
+    rows, cols = land.shape
+    line_grid = np.zeros((rows, cols), dtype=bool)
+    for point in points:
+        r, c = geo_grid.latlon_to_rc(point["lat"], point["lon"])
+        if 0 <= r < rows and 0 <= c < cols:
+            line_grid[r, c] = True
+
+    for i in range(len(points) - 1):
+        r0, c0 = geo_grid.latlon_to_rc(points[i]["lat"], points[i]["lon"])
+        r1, c1 = geo_grid.latlon_to_rc(points[i+1]["lat"], points[i+1]["lon"])
+        _bresenham_line(line_grid, r0, c0, r1, c1)
+
+    # Expand to a hard barrier wide enough that 8-neighbor spread cannot slip
+    # diagonally through a one-cell raster gap.
+    effect_radius_cells = max(2, int(round(effect_radius_m / cell_m)))
+    try:
+        from scipy.ndimage import distance_transform_edt
+        dist = distance_transform_edt(~line_grid)
+    except Exception:
+        dist = np.full((rows, cols), float(effect_radius_cells + 1))
+        lr, lc = np.where(line_grid)
+        if len(lr):
+            r_idx = np.arange(rows)[:, None]
+            c_idx = np.arange(cols)[None, :]
+            for i in range(min(len(lr), 5000)):
+                d = np.hypot(r_idx - lr[i], c_idx - lc[i])
+                dist = np.minimum(dist, d)
+
+    mask = dist <= effect_radius_cells
+
+    # Apply hard blocking to simulation
+    if hasattr(sim, "apply_firebreak_mask"):
+        sim.apply_firebreak_mask(mask)
+    else:
+        # Fallback: set blocked_mask directly
+        sim.blocked_mask[mask] = True
+
+    # Maintain a blocked zone id map and labels on sim for event reporting
+    try:
+        if not hasattr(sim, '_blocked_zone_ids'):
+            sim._blocked_zone_ids = np.zeros_like(sim.blocked_mask, dtype=np.int32)
+            sim._zone_labels = {}
+            sim._next_zone_id = 1
+        zid = sim._next_zone_id
+        sim._next_zone_id += 1
+        sim._zone_labels[zid] = zone_label or f"Zone {zid}"
+        sim._blocked_zone_ids[mask] = zid
+    except Exception:
+        # non-fatal
+        pass
+
+    return int(mask.sum())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -999,8 +1064,7 @@ async def _handle(websocket):
                     await send({"type": "status",
                                 "message": f"Speed set: {n} steps/frame."})
 
-                elif action in ("containment_line", "suppression_line", "firebreak"):
-                    # Unified containment handler — "firebreak" mapped here for compat
+                elif action in ("containment_line", "suppression_line"):
                     n = _apply_containment_line(
                         land, sim, geo_grid,
                         iv.get("points", []),
@@ -1014,6 +1078,19 @@ async def _handle(websocket):
                     await send({"type": "status",
                                 "message": f"Containment line deployed: {n} cells protected."})
                     await send(fire_info.intervention("containment_line", n))
+
+                elif action == "firebreak":
+                    # Hard firebreak: block cells and register zone label
+                    n = _apply_firebreak(
+                        land, sim, geo_grid,
+                        iv.get("points", []),
+                        float(iv.get("effect_radius_m", 0.0)),
+                        cell_m,
+                        zone_label=iv.get("label", None),
+                    )
+                    await send({"type": "status",
+                                "message": f"Firebreak applied (hard): {n} cells blocked."})
+                    await send(fire_info.intervention("firebreak", n))
 
                 elif action == "water_drop":
                     n = _apply_water_drop(land, sim, geo_grid,
@@ -1095,6 +1172,36 @@ async def _handle(websocket):
                 ros_n, ros_e, ros_s, ros_w = _quadrant_ros(
                     sim, sim.state, rows, cols, cell_m)
                 gjb, gjd = _state_to_geojson(sim.state, geo_grid, rows, cols)
+                # Report any blocked encounters detected in the model step
+                try:
+                    encounters = getattr(sim, '_blocked_encounters', [])
+                    if encounters:
+                        label_counts: dict[str,int] = {}
+                        for (r_hit, c_hit, dir_idx) in encounters:
+                            zid = None
+                            label = None
+                            if hasattr(sim, '_blocked_zone_ids'):
+                                try:
+                                    zid = int(sim._blocked_zone_ids[r_hit, c_hit])
+                                except Exception:
+                                    zid = None
+                            if zid and hasattr(sim, '_zone_labels'):
+                                label = sim._zone_labels.get(zid, None)
+                            if not label:
+                                label = 'firebreak'
+                            label_counts[label] = label_counts.get(label, 0) + 1
+                        for label, cnt in label_counts.items():
+                            msg = f"Fire met {label} firebreak zone, couldn't expand (encounters: {cnt})"
+                            await send({
+                                "type": "fire_event",
+                                "event_type": "info",
+                                "icon": "🛠",
+                                "message": msg,
+                            })
+                        # clear encounters
+                        sim._blocked_encounters = []
+                except Exception:
+                    pass
                 await send({
                     "type":                   "frame",
                     "step":                   step,
