@@ -1,0 +1,4192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project WILSON — Sandbox</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.css" />
+  <script src="https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.js"></script>
+  <!-- D. Plotly.js for interactive 3D mesh carousel -->
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #0d0d0f; color: #cdd6f4;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    #map { position: absolute; inset: 0; }
+
+    /* ── Canvas overlays ─────────────────────────────────────────────────── */
+    #atmo-overlay {
+      position: absolute; inset: 0; pointer-events: none; z-index: 10;
+      transition: background-color 8s linear;
+    }
+    #glow-canvas  { position: absolute; inset: 0; pointer-events: none; z-index: 15; width: 100%; height: 100%; mix-blend-mode: screen; }
+    #smoke-canvas { position: absolute; inset: 0; pointer-events: none; z-index: 20; width: 100%; height: 100%; mix-blend-mode: multiply; opacity: 0.9; }
+    #wind-canvas  { position: absolute; inset: 0; pointer-events: none; z-index: 12; width: 100%; height: 100%; mix-blend-mode: screen; opacity: 0.85; }
+
+    /* ── Weather strip ───────────────────────────────────────────────────── */
+    #weather-strip {
+      position: absolute; top: 0; left: 0; right: 0;
+      display: none; align-items: center; gap: 16px;
+      padding: 5px 16px;
+      background: rgba(17,17,27,0.85);
+      border-bottom: 1px solid rgba(137,180,250,0.12);
+      backdrop-filter: blur(8px);
+      z-index: 110; pointer-events: none;
+      font-size: 11.5px; color: #a6adc8; white-space: nowrap;
+    }
+    #weather-strip.visible { display: flex; }
+    #ws-time     { font-weight: 700; color: #89b4fa; }
+    #ws-wallclock{ font-weight: 700; color: #a6e3a1; font-size: 11px; }
+    #ws-arrow    { display: inline-block; font-size: 15px; transition: transform 2s ease; }
+
+    /* ── Control panel ───────────────────────────────────────────────────── */
+    #panel {
+      position: absolute; top: 14px; left: 14px;
+      width: 270px; max-height: calc(100vh - 100px);
+      background: rgba(17,17,27,0.93);
+      border: 1px solid rgba(137,180,250,0.18);
+      border-radius: 10px; padding: 14px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 32px rgba(0,0,0,0.55);
+      z-index: 100; overflow-y: auto; user-select: none;
+    }
+    #panel::-webkit-scrollbar { width: 4px; }
+    #panel::-webkit-scrollbar-thumb { background: #313244; border-radius: 2px; }
+    #panel h1 {
+      font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;
+      color: #89b4fa; margin-bottom: 10px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    #panel h1 span.flame { font-size: 16px; }
+    .sect-label {
+      font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+      color: #585b70; margin: 10px 0 5px;
+    }
+    .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+    .row label { font-size: 11.5px; color: #a6adc8; flex: 1; }
+    .row input[type="number"],
+    .row input[type="text"],
+    .row input[type="date"],
+    .row input[type="time"] {
+      width: 80px; background: #1e1e2e; border: 1px solid #313244;
+      border-radius: 5px; color: #cdd6f4; font-size: 12px;
+      padding: 3px 6px; outline: none;
+      transition: border-color 0.15s; text-align: right;
+    }
+    .row input:focus { border-color: #89b4fa; }
+    .row .unit { font-size: 10px; color: #585b70; margin-left: 4px; min-width: 22px; }
+
+    /* ── Mode buttons ────────────────────────────────────────────────────── */
+    #mode-toggle { display: flex; gap: 3px; margin-bottom: 6px; flex-wrap: wrap; }
+    #mode-toggle button {
+      flex: 1; padding: 5px 2px; font-size: 10px;
+      border: 1px solid #313244; border-radius: 6px;
+      background: #1e1e2e; color: #a6adc8;
+      cursor: pointer; transition: background 0.15s, color 0.15s; white-space: nowrap;
+      min-width: 44px;
+    }
+    #mode-toggle button.active-cursor      { background: #cba6f7; border-color: #cba6f7; color: #1e1e2e; font-weight: 600; }
+    #mode-toggle button.active-ignite      { background: #f38ba8; border-color: #f38ba8; color: #1e1e2e; font-weight: 600; }
+    #mode-toggle button.active-water       { background: #89dceb; border-color: #89dceb; color: #1e1e2e; font-weight: 600; }
+    #mode-toggle button.active-containment { background: #f9e2af; border-color: #f9e2af; color: #1e1e2e; font-weight: 600; }
+    #mode-toggle button.active-mask        { background: #a6e3a1; border-color: #a6e3a1; color: #1e1e2e; font-weight: 600; }
+    .map-cursor-cursor      { cursor: default; }
+    .map-cursor-ignite      { cursor: crosshair; }
+    .map-cursor-water       { cursor: none; }
+    .map-cursor-containment { cursor: cell; }
+    .map-cursor-mask        { cursor: crosshair; }
+
+    /* ── Optimizer section ───────────────────────────────────────────────── */
+    .opt-row { display:flex; gap:6px; align-items:center; margin-bottom:4px; }
+    .opt-row label { flex:1; font-size:11px; color:#a6adc8; }
+    .opt-row input[type="number"] { width:54px; background:#313244; border:1px solid #45475a;
+      color:#cdd6f4; border-radius:4px; padding:2px 5px; font-size:11px; }
+    #btn-close-mask { background:#a6e3a1; color:#1e1e2e; display:none; margin-bottom:4px; }
+    #btn-clear-mask { background:#313244; color:#a6adc8; display:none; margin-bottom:6px; }
+    #btn-run-opt    { background: linear-gradient(135deg,#89b4fa,#cba6f7);
+                      color:#1e1e2e; font-weight:700; letter-spacing:0.5px; }
+    #btn-run-opt:disabled { opacity:0.4; cursor:not-allowed; }
+    #opt-result-box { margin-top:6px; padding:6px 8px; background:#181825;
+                      border-radius:6px; font-size:11px; color:#a6e3a1;
+                      display:none; line-height:1.6; }
+    /* ── Continue-from-optimizer panel ─────────────────────────────────────── */
+    #opt-continue {
+      display: none; border-top: 1px solid #313244;
+      margin-top: 9px; padding-top: 9px;
+    }
+    #opt-continue .oc-title {
+      font-size: 9.5px; color: #89b4fa; font-weight: 700;
+      letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 7px;
+    }
+    .oc-mode-btn {
+      flex: 1; padding: 5px 3px; font-size: 10px;
+      border: 1px solid #313244; border-radius: 5px;
+      background: #1e1e2e; color: #a6adc8;
+      cursor: pointer; transition: background 0.15s, color 0.15s;
+      white-space: nowrap;
+    }
+    .oc-mode-btn.active {
+      background: #89b4fa; border-color: #89b4fa;
+      color: #1e1e2e; font-weight: 700;
+    }
+    .oc-desc {
+      font-size: 9px; color: #585b70; line-height: 1.5; margin-bottom: 5px;
+    }
+    .oc-check-row {
+      display: flex; align-items: center; gap: 5px; margin-bottom: 4px;
+    }
+    .oc-check-row label { font-size: 10px; color: #a6adc8; cursor: pointer; }
+    #oc-iou-warn {
+      font-size: 9px; line-height: 1.5; padding: 4px 7px;
+      background: rgba(250,179,135,0.08); border: 1px solid rgba(250,179,135,0.3);
+      border-radius: 4px; color: #fab387; margin-bottom: 5px; display: none;
+    }
+    #oc-gt-missing {
+      font-size: 9px; color: #f38ba8; margin-bottom: 4px; display: none;
+    }
+
+    /* ── Microclimate memory panel ──────────────────────────────────────────── */
+    #mc-panel {
+      display: none; margin-top: 8px;
+      padding: 8px 10px; background: #181825;
+      border-radius: 6px; border-left: 2px solid #cba6f7;
+    }
+    #mc-panel .mc-title {
+      font-size: 9.5px; letter-spacing: 0.09em; text-transform: uppercase;
+      color: #cba6f7; font-weight: 700; margin-bottom: 6px;
+    }
+    .mc-row { display: flex; justify-content: space-between;
+              font-size: 10.5px; color: #a6adc8; margin-bottom: 3px; }
+    .mc-row b { color: #cdd6f4; }
+    .mc-stats { font-size: 10px; color: #585b70; line-height: 1.7; margin-top: 3px; }
+    .mc-stats b { color: #a6adc8; }
+    #mc-opt-badge {
+      display: none; margin-top: 5px;
+      font-size: 9.5px; color: #a6e3a1; line-height: 1.5;
+    }
+    #mc-no-data {
+      font-size: 9.5px; color: #45475a; font-style: italic; margin-top: 3px;
+    }
+
+    /* ── Optimizer progress modal ────────────────────────────────────────── */
+    #opt-modal {
+      display: none;
+      position: fixed; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 9000;
+      background: #1e1e2e;
+      border: 1px solid #45475a;
+      border-radius: 12px;
+      padding: 20px 24px;
+      min-width: 320px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+    }
+    #opt-modal.visible { display: block; }
+    #opt-modal-title {
+      font-size: 14px; font-weight: 700; color: #cdd6f4;
+      margin-bottom: 14px; text-align: center;
+    }
+    #opt-modal-title .opt-spin {
+      display: inline-block;
+      animation: opt-spin 1.2s linear infinite;
+    }
+    @keyframes opt-spin { to { transform: rotate(360deg); } }
+    #opt-progress-track {
+      background: #313244; border-radius: 99px; height: 10px;
+      overflow: hidden; margin-bottom: 10px;
+    }
+    #opt-progress-fill {
+      height: 100%; border-radius: 99px; width: 0%;
+      background: linear-gradient(90deg, #89b4fa, #a6e3a1, #f9e2af);
+      background-size: 200% 100%;
+      animation: opt-shimmer 1.8s ease-in-out infinite;
+      transition: width 0.3s ease;
+    }
+    @keyframes opt-shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .opt-stat-row { display:flex; justify-content:space-between;
+                    font-size:11px; color:#a6adc8; margin-bottom:4px; }
+    .opt-stat-row b { color:#cdd6f4; }
+    #opt-modal-iou { font-size:22px; font-weight:800; text-align:center;
+                     color:#a6e3a1; margin:8px 0 4px; }
+    #opt-modal-btn { display:block; width:100%; margin-top:12px; padding:6px;
+                     background:#313244; border:1px solid #45475a;
+                     color:#a6adc8; border-radius:6px; cursor:pointer;
+                     font-size:11px; }
+    #opt-modal-btn:hover { background:#45475a; color:#cdd6f4; }
+
+    /* ── Ignition list ───────────────────────────────────────────────────── */
+    #ign-list {
+      max-height: 70px; overflow-y: auto;
+      font-size: 10px; color: #6c7086; line-height: 1.6; margin-bottom: 4px;
+    }
+    #ign-list::-webkit-scrollbar { width: 4px; }
+    #ign-list::-webkit-scrollbar-thumb { background: #313244; border-radius: 2px; }
+
+    /* ── Speed slider ────────────────────────────────────────────────────── */
+    .speed-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+    .speed-row label { font-size: 11px; color: #a6adc8; white-space: nowrap; min-width: 48px; }
+    .speed-row input[type="range"] { flex: 1; accent-color: #89b4fa; cursor: pointer; }
+    .speed-row .speed-val { font-size: 11px; color: #cdd6f4; font-weight: 600; min-width: 26px; text-align: right; }
+
+    /* ── Action buttons ──────────────────────────────────────────────────── */
+    .btn {
+      display: block; width: 100%; padding: 7px;
+      border: none; border-radius: 6px;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+      margin-top: 6px; transition: opacity 0.15s, filter 0.15s;
+    }
+    .btn:active   { filter: brightness(0.85); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #btn-run    { background: #a6e3a1; color: #1e1e2e; }
+    #btn-pause  { background: #f9e2af; color: #1e1e2e; display: none; }
+    #btn-resume { background: #89b4fa; color: #1e1e2e; display: none; }
+    #btn-clear  { background: #313244; color: #cdd6f4; }
+    #btn-apply-containment { background: #f9e2af; color: #1e1e2e; display: none; margin-top: 4px; }
+
+    /* ── Status & stats ──────────────────────────────────────────────────── */
+    #status {
+      margin-top: 8px; font-size: 10.5px; color: #a6adc8;
+      min-height: 14px; word-break: break-word;
+    }
+    #status.err  { color: #f38ba8; }
+    #status.ok   { color: #a6e3a1; }
+    #status.info { color: #89b4fa; }
+    #stats { display: flex; gap: 8px; margin-top: 6px; font-size: 10.5px; color: #6c7086; }
+    #stats span { flex: 1; text-align: center; background: #1e1e2e; border-radius: 4px; padding: 2px 4px; }
+    #stats span b { color: #cdd6f4; }
+
+    /* ── Water brush cursor ring ─────────────────────────────────────────── */
+    #brush-cursor-ring {
+      position: absolute; pointer-events: none; z-index: 55;
+      border: 2px solid rgba(137, 220, 235, 0.85);
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      transition: width 0.06s, height 0.06s;
+      display: none;
+    }
+
+    /* ── Tool controls (inside panel) ───────────────────────────────────── */
+    #brush-controls, #containment-controls {
+      display: none; border-top: 1px solid #313244; margin-top: 6px; padding-top: 6px;
+    }
+    .ctrl-row { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
+    .ctrl-row label { font-size: 10.5px; color: #a6adc8; flex: 1; }
+    .ctrl-row input[type="range"] { flex: 1; accent-color: #89dceb; cursor: pointer; }
+    .ctrl-row .cval { font-size: 10.5px; color: #cdd6f4; min-width: 30px; text-align: right; }
+
+    /* ── Rect analysis panel ─────────────────────────────────────────────── */
+    #rect-analysis {
+      position: absolute; right: 14px; bottom: 60px;
+      width: 230px;
+      background: rgba(17,17,27,0.96);
+      border: 1px solid rgba(203,166,247,0.22);
+      border-radius: 10px; padding: 12px 14px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 28px rgba(0,0,0,0.6);
+      z-index: 105; overflow-y: auto;
+      display: none; max-height: 340px;
+    }
+    #rect-analysis.visible { display: block; }
+    #rect-analysis h4 {
+      font-size: 10.5px; color: #cba6f7; letter-spacing: 0.1em;
+      text-transform: uppercase; margin-bottom: 8px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    #rect-analysis h4 button {
+      background: none; border: none; color: #585b70; cursor: pointer;
+      font-size: 12px; padding: 0;
+    }
+    .ra-row { font-size: 10.5px; color: #a6adc8; margin-bottom: 3px; line-height: 1.5; }
+    .ra-row b { color: #cdd6f4; }
+    .ra-divider { border: none; border-top: 1px solid #313244; margin: 5px 0; }
+    .ra-mc { font-size: 9.5px; color: #585b70; font-style: italic; margin-top: 4px; }
+    .ra-mc b { color: #cba6f7; }
+
+    /* ── Containment decay badge ─────────────────────────────────────────── */
+    .containment-badge {
+      position: absolute; background: rgba(249,226,175,0.18);
+      border: 1px solid rgba(249,226,175,0.4);
+      border-radius: 4px; padding: 2px 6px;
+      font-size: 9px; color: #f9e2af; pointer-events: none; z-index: 100;
+      white-space: nowrap;
+    }
+
+    /* ── Microclimate notice in cell explain panel ───────────────────────── */
+    .ce-factor.microclimate { border-left-color: #cba6f7; }
+
+    /* ── Fire Info Window — draggable cell analysis panel ───────────────── */
+    #fire-info-window {
+      position: absolute; right: 14px; top: 14px;
+      width: 264px;
+      background: rgba(17,17,27,0.97);
+      border: 1px solid rgba(137,180,250,0.22);
+      border-radius: 10px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 6px 32px rgba(0,0,0,0.65);
+      z-index: 106; display: none;
+      user-select: none;
+    }
+    #fire-info-window.visible { display: block; }
+    #fire-info-header {
+      background: rgba(137,180,250,0.09);
+      padding: 7px 10px 7px 12px; cursor: move;
+      display: flex; justify-content: space-between; align-items: center;
+      border-bottom: 1px solid rgba(137,180,250,0.12);
+      border-radius: 10px 10px 0 0;
+    }
+    #fire-info-header .fi-title {
+      font-size: 10px; color: #89b4fa; font-weight: 700;
+      letter-spacing: 0.12em; text-transform: uppercase;
+    }
+    #fire-info-header .fi-btns { display: flex; gap: 3px; }
+    #fire-info-header button {
+      background: none; border: none; color: #585b70;
+      cursor: pointer; font-size: 12px; padding: 0 2px; line-height: 1;
+    }
+    #fire-info-header button:hover { color: #cdd6f4; }
+    #fire-info-body {
+      overflow-y: auto; max-height: 460px; padding: 10px 13px 12px;
+    }
+    #fire-info-body::-webkit-scrollbar { width: 4px; }
+    #fire-info-body::-webkit-scrollbar-thumb { background: #313244; border-radius: 2px; }
+    .fi-sect {
+      font-size: 9px; letter-spacing: 0.13em; text-transform: uppercase;
+      color: #45475a; margin: 8px 0 4px; padding-bottom: 2px;
+      border-bottom: 1px solid #1e1e2e;
+    }
+    .ce-row { font-size: 10.5px; color: #a6adc8; margin-bottom: 2px; line-height: 1.55; }
+    .ce-row b { color: #cdd6f4; }
+    .ce-state-burning  { color: #fab387; font-weight: 700; }
+    .ce-state-burned   { color: #6c7086; }
+    .ce-state-unburned { color: #a6e3a1; }
+    .ce-divider { border: none; border-top: 1px solid #1e1e2e; margin: 6px 0; }
+    /* Numerical breakdown box */
+    .fi-breakdown {
+      background: #181825; border-radius: 6px; padding: 6px 9px; margin: 5px 0;
+    }
+    .fi-bd-row {
+      display: flex; justify-content: space-between;
+      font-size: 10px; color: #a6adc8; line-height: 1.75;
+    }
+    .fi-bd-val { font-weight: 600; min-width: 44px; text-align: right; }
+    .fi-bd-val.pos { color: #a6e3a1; }
+    .fi-bd-val.neg { color: #f38ba8; }
+    .fi-bd-total {
+      border-top: 1px solid #313244; margin-top: 3px; padding-top: 4px;
+      display: flex; justify-content: space-between;
+      font-size: 10.5px; font-weight: 700; color: #cdd6f4;
+    }
+    .ce-factor {
+      font-size: 10px; color: #a6adc8; background: #181825;
+      border-left: 2px solid #45475a; padding: 4px 7px; margin: 3px 0;
+      border-radius: 0 4px 4px 0; line-height: 1.5;
+    }
+    .ce-factor.wind    { border-left-color: #89dceb; }
+    .ce-factor.fuel    { border-left-color: #a6e3a1; }
+    .ce-factor.water   { border-left-color: #89b4fa; }
+    .ce-factor.supp    { border-left-color: #f9e2af; }
+    .ce-factor.spread  { border-left-color: #fab387; }
+    .ce-hint {
+      font-size: 9.5px; color: #45475a; margin-top: 6px; text-align: center;
+    }
+
+    /* ── Risk panel ──────────────────────────────────────────────────────── */
+    #risk-panel {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      right: -220px; width: 200px;
+      background: rgba(17,17,27,0.93);
+      border: 1px solid rgba(137,180,250,0.18);
+      border-radius: 10px; padding: 12px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 32px rgba(0,0,0,0.55);
+      z-index: 100; transition: right 0.3s ease;
+      font-size: 11px; color: #a6adc8;
+      overflow-y: auto; max-height: calc(100vh - 100px);
+    }
+    #risk-panel.open { right: 60px; }
+    #risk-panel h3 {
+      font-size: 9px; text-transform: uppercase;
+      letter-spacing: 0.12em; color: #585b70; margin: 0 0 5px;
+    }
+    .risk-sect { margin-bottom: 10px; }
+    .risk-row  { display: flex; justify-content: space-between; margin: 3px 0; }
+    .risk-row b { color: #cdd6f4; }
+    #threat-badge {
+      display: inline-block; padding: 3px 10px; border-radius: 10px;
+      font-size: 11px; font-weight: 700;
+      background: #313244; color: #a6adc8;
+    }
+    #threat-badge.monitor  { background: #1e3a2f; color: #a6e3a1; }
+    #threat-badge.elevated { background: #3a3020; color: #f9e2af; }
+    #threat-badge.high     { background: #3a2520; color: #fab387; }
+    #threat-badge.critical { background: #3a1a1a; color: #f38ba8; }
+    .arc-center { display: flex; justify-content: center; padding: 4px 0; }
+
+    /* ── Floating action buttons ─────────────────────────────────────────── */
+    .fab {
+      position: absolute; right: 14px;
+      padding: 6px 10px;
+      background: rgba(17,17,27,0.88);
+      border: 1px solid rgba(137,180,250,0.18);
+      border-radius: 6px; font-size: 12px;
+      cursor: pointer; z-index: 105;
+      backdrop-filter: blur(8px); color: #a6adc8;
+      transition: color 0.2s, border-color 0.2s, background 0.2s;
+    }
+    .fab:hover { color: #cdd6f4; }
+    .fab.on    { color: #89dceb; border-color: #89dceb; background: rgba(137,220,235,0.1); }
+    /* Stack FABs vertically centered on right edge */
+    #risk-toggle { top: calc(50% - 54px); }
+    #btn-wind    { top: calc(50%); }
+    #btn-mute    { top: calc(50% + 36px); }
+
+    /* ── Timeline bar ────────────────────────────────────────────────────── */
+    #timeline-bar {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      display: none; flex-direction: column;
+      background: rgba(17,17,27,0.9);
+      border-top: 1px solid rgba(137,180,250,0.18);
+      backdrop-filter: blur(8px);
+      z-index: 110; padding: 4px 16px 6px;
+    }
+    #timeline-bar.visible { display: flex; }
+    #tl-stats { display: flex; gap: 12px; font-size: 11px; color: #a6adc8; margin-bottom: 3px; }
+    #tl-stats b { color: #cdd6f4; }
+    #scrubber  { width: 100%; accent-color: #89b4fa; cursor: pointer; height: 4px; margin: 0; }
+    #tl-days   { display: flex; gap: 5px; margin-top: 3px; flex-wrap: wrap; }
+    .day-tag {
+      font-size: 9.5px; color: #6c7086; cursor: pointer;
+      padding: 1px 5px; border-radius: 3px;
+      background: #1e1e2e; border: 1px solid transparent; user-select: none;
+    }
+    .day-tag:hover  { color: #cdd6f4; }
+    .day-tag.active { color: #a6e3a1; border-color: #a6e3a1; }
+
+    /* ── Map view tabs ───────────────────────────────────────────────────── */
+    #map-tabs {
+      position: absolute; top: 14px;
+      left: 50%; transform: translateX(-50%);
+      display: flex; gap: 3px;
+      background: rgba(17,17,27,0.88);
+      border: 1px solid rgba(137,180,250,0.18);
+      border-radius: 8px; padding: 3px;
+      z-index: 105; backdrop-filter: blur(8px);
+    }
+    .map-tab {
+      padding: 5px 12px; font-size: 11px; font-weight: 600;
+      border: none; border-radius: 6px; cursor: pointer;
+      background: transparent; color: #585b70;
+      transition: background 0.15s, color 0.15s;
+    }
+    .map-tab.active { background: #313244; color: #cdd6f4; }
+    .map-tab:hover:not(.active) { color: #a6adc8; }
+    /* 3-D view button — always visible, state driven by .sim3d-live class */
+    #tab-3d-view {
+      border-left: 1px solid rgba(137,180,250,0.22);
+      margin-left: 2px;
+      color: #6c7086;          /* muted but clearly visible */
+      cursor: default;
+    }
+    #tab-3d-view.sim3d-live {
+      color: #89b4fa;
+      cursor: pointer;
+    }
+    #tab-3d-view.sim3d-live:hover { color: #cba6f7; background: #1e1e2e; }
+
+    /* ── Vegetation legend ───────────────────────────────────────────────── */
+    #veg-legend {
+      position: absolute; bottom: 50px; left: 50%;
+      transform: translateX(-50%);
+      display: none; flex-wrap: wrap; gap: 4px;
+      max-width: 600px; justify-content: center;
+      background: rgba(17,17,27,0.88);
+      border: 1px solid rgba(137,180,250,0.18);
+      border-radius: 8px; padding: 8px 10px;
+      z-index: 105; backdrop-filter: blur(8px);
+      font-size: 10px; color: #a6adc8;
+    }
+    #veg-legend.visible { display: flex; }
+    .leg-item { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+    .leg-swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+
+    /* ── Debug overlay ───────────────────────────────────────────────────── */
+    #dbg {
+      position: fixed; top: 8px; right: 8px; z-index: 9999;
+      background: rgba(0,0,0,0.82); color: #a6e3a1;
+      font: 11px/1.5 monospace; padding: 8px 12px; border-radius: 6px;
+      max-width: 400px; max-height: 220px; overflow-y: auto; pointer-events: none;
+    }
+
+    /* ── Events panel (footer-centered subtitle bar) ───────────────────── */
+    #events-panel {
+      position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+      z-index: 1105;
+      width: min(96%, 640px); max-width: 920px; height: auto; max-height: 180px;
+      background: rgba(8,8,12,0.92);
+      border: 1px solid rgba(137,180,250,0.10);
+      border-radius: 12px; backdrop-filter: blur(6px);
+      display: flex; flex-direction: column; align-items: stretch; overflow: hidden;
+      padding: 8px 12px; gap: 8px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial;
+    }
+    #events-panel.collapsed {
+      max-height: 46px;
+      padding-bottom: 0;
+    }
+    #events-panel.collapsed #events-list {
+      display: none;
+    }
+    #events-hdr {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      flex-shrink: 0; color: #89b4fa; font-weight: 700; font-size: 15px;
+      white-space: nowrap; padding: 2px 4px;
+      cursor: pointer;
+    }
+    #ev-clear-btn {
+      background: none; border: none; color: #a6adc8;
+      cursor: pointer; font-size: 18px; padding: 4px 6px; line-height: 1;
+      margin-left: 10px;
+    }
+    #ev-clear-btn:hover { color: #f38ba8; }
+    #events-list {
+      overflow-y: auto; padding: 4px 6px; flex: 1; display: flex; flex-direction: column;
+      gap: 6px; max-height: calc(3 * 44px + 12px); /* show up to 3 items */
+    }
+    .ev {
+      display: flex; gap: 8px; align-items: center; padding: 8px 10px;
+      background: rgba(255,255,255,0.02); border-radius: 7px;
+      font-size: 15px; line-height: 1.05; color: #cdd6f4;
+      min-height: 44px; width: 100%; box-sizing: border-box;
+    }
+    .ev-t   { color: #84a0c6; flex-shrink: 0; min-width: 72px; font-size: 13px; }
+    .ev-icon{ flex-shrink: 0; font-size: 18px; }
+    .ev-msg { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+    .ev-ignition    .ev-msg { color: #f38ba8; }
+    .ev-danger      .ev-msg { color: #fab387; }
+    .ev-milestone   .ev-msg { color: #89b4fa; }
+    .ev-ok          .ev-msg { color: #a6e3a1; }
+    .ev-warn        .ev-msg { color: #f9e2af; }
+    .ev-intervention .ev-msg{ color: #89dceb; }
+    .ev-weather     .ev-msg { color: #74c7ec; }
+    .ev-info        .ev-msg { color: #7f849c; }
+
+    /* ── 3D terrain mesh popup (middle-click) ────────────────────────────── */
+    #mesh-popup {
+      position: fixed; width: 480px; height: 420px;
+      max-width: calc(100vw - 24px); max-height: calc(100vh - 24px);
+      background: rgba(10,10,18,0.97);
+      border: 1.5px solid rgba(249,226,47,0.28);
+      border-radius: 10px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.75), 0 0 22px rgba(249,226,47,0.07);
+      z-index: 1100; display: none; flex-direction: column; overflow: hidden;
+    }
+    #mesh-popup.visible { display: flex; }
+    #mesh-popup-header {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 8px 12px;
+      background: rgba(18,18,30,0.99);
+      border-bottom: 1px solid rgba(249,226,47,0.10);
+      cursor: move; flex-shrink: 0; user-select: none;
+    }
+    #mesh-popup-title {
+      font-size: 10.5px; color: #f9e2af; font-weight: 700;
+      letter-spacing: 0.04em; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; flex: 1;
+    }
+    .mesh-step-row { display: flex; align-items: center; gap: 3px; margin-top: 3px; }
+    .mesh-step-tag {
+      font-size: 8.5px; font-weight: 700; padding: 1px 5px;
+      border-radius: 3px; letter-spacing: 0.05em;
+      background: #1e1e2e; color: #45475a;
+      border: 1px solid transparent;
+      transition: background 0.25s, color 0.25s, border-color 0.25s;
+    }
+    .mesh-step-tag.active {
+      background: rgba(137,180,250,0.13); color: #89b4fa;
+      border-color: rgba(137,180,250,0.35);
+    }
+    .mesh-step-tag.done {
+      background: rgba(166,227,161,0.10); color: #a6e3a1;
+      border-color: rgba(166,227,161,0.25);
+    }
+    .mesh-step-arrow { color: #313244; font-size: 8px; }
+    #mesh-popup-close {
+      background: none; border: none; color: #585b70;
+      cursor: pointer; font-size: 15px; padding: 0 2px; line-height: 1;
+      flex-shrink: 0; transition: color 0.15s;
+    }
+    #mesh-popup-close:hover { color: #f38ba8; }
+    #mesh-popup-body {
+      flex: 1; position: relative; overflow: hidden;
+      background: #060612; min-height: 0;
+    }
+    #mesh-popup-loading {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 6px; pointer-events: none;
+    }
+    #mesh-popup-canvas-wrap {
+      width: 100%; height: 100%; display: none; position: relative;
+    }
+
+    /* ── Carousel inside popup ───────────────────────────────────────────── */
+    #mesh-carousel-wrap {
+      position: relative; width: 100%; height: 100%; overflow: hidden; display: none;
+    }
+    #mesh-slides {
+      display: flex; width: 300%; height: 100%;
+      transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .mesh-slide { width: 33.333%; height: 100%; flex-shrink: 0; position: relative; }
+    .mesh-slide-label {
+      position: absolute; top: 7px; left: 50%; transform: translateX(-50%);
+      font-size: 9px; font-weight: 700; color: #6c7086;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      background: rgba(8,8,20,0.75); padding: 2px 9px; border-radius: 3px;
+      pointer-events: none; z-index: 5; white-space: nowrap;
+    }
+    .mesh-nav-btn {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      width: 26px; height: 26px; border-radius: 50%;
+      background: rgba(18,18,32,0.82); border: 1px solid rgba(137,180,250,0.22);
+      color: #89b4fa; font-size: 14px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      z-index: 10; transition: background 0.15s, opacity 0.2s; opacity: 0.55;
+      user-select: none; padding: 0;
+    }
+    .mesh-nav-btn:hover { background: rgba(40,40,80,0.96); opacity: 1; }
+    #mesh-nav-prev { left: 5px; }
+    #mesh-nav-next { right: 5px; }
+    .mesh-dots {
+      position: absolute; bottom: 7px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 5px; z-index: 10;
+    }
+    .mesh-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: #313244; border: 1px solid #45475a; cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .mesh-dot.active { background: #f9e2af; border-color: #f9e2af; }
+    /* E. Wind toggle button */
+    #mesh-wind-btn {
+      background: rgba(30,30,50,0.8); border: 1px solid rgba(137,220,235,0.22);
+      border-radius: 5px; color: #6c7086; cursor: pointer; flex-shrink: 0;
+      font-size: 9.5px; padding: 3px 8px; transition: all 0.15s; white-space: nowrap;
+    }
+    #mesh-wind-btn:hover  { background: rgba(50,50,90,0.8); color: #89dceb; border-color: rgba(137,220,235,0.50); }
+    #mesh-wind-btn.active { background: rgba(137,220,235,0.15); color: #89dceb; border-color: rgba(137,220,235,0.70); }
+    #mesh-del-btn {
+      background: rgba(30,30,50,0.8); border: 1px solid rgba(243,139,168,0.22);
+      border-radius: 5px; color: #6c7086; cursor: pointer; flex-shrink: 0;
+      font-size: 9.5px; padding: 3px 8px; transition: all 0.15s; white-space: nowrap;
+    }
+    #mesh-del-btn:hover { background: rgba(80,20,35,0.9); color: #f38ba8; border-color: rgba(243,139,168,0.65); }
+  </style>
+</head>
+<body>
+
+  <div id="map"></div>
+  <div id="atmo-overlay"></div>
+  <canvas id="glow-canvas"></canvas>
+  <canvas id="smoke-canvas"></canvas>
+  <canvas id="wind-canvas" style="display:none"></canvas>
+
+  <!-- Water brush cursor ring (follows mouse in water mode) -->
+  <div id="brush-cursor-ring"></div>
+
+  <!-- Rect analysis panel (shown after Shift+drag in cursor mode) -->
+  <div id="rect-analysis">
+    <h4>Area Analysis <button onclick="closeRectAnalysis()" title="Close">✕</button></h4>
+    <div id="rect-analysis-content">
+      <div class="ce-hint">Shift+drag in Cursor mode to select an area</div>
+    </div>
+  </div>
+
+  <!-- Cell explanation panel (Alt+click to populate) -->
+  <!-- Fire Info Window — draggable cell analysis panel -->
+  <div id="fire-info-window">
+    <div id="fire-info-header">
+      <span class="fi-title">🔥 Cell Analysis</span>
+      <div class="fi-btns">
+        <button onclick="closeFireInfoWindow()" title="Close">✕</button>
+      </div>
+    </div>
+    <div id="fire-info-body">
+      <div class="ce-hint">Alt+click a cell to analyse it</div>
+    </div>
+  </div>
+
+  <!-- Map view tabs -->
+  <div id="map-tabs">
+    <button class="map-tab active" id="tab-satellite"  onclick="setMapTab('satellite')">🛰 Satellite</button>
+    <button class="map-tab"        id="tab-vegetation" onclick="setMapTab('vegetation')">🌿 Vegetation</button>
+    <button class="map-tab"        id="tab-3d-view"    onclick="request3DView()"
+            title="Launch 3D terrain view (start a simulation first)">🧊 3D View</button>
+  </div>
+
+  <!-- Vegetation legend (shown when vegetation tab is active) -->
+  <div id="veg-legend"></div>
+
+  <!-- Weather strip -->
+  <div id="weather-strip">
+    <span id="ws-time">T+00:00</span>
+    <span id="ws-wallclock"></span>
+    <span>💨 <b id="ws-wind">—</b> m/s</span>
+    <span id="ws-arrow">↑</span>
+    <span>🌡 <b id="ws-temp">—</b>°C</span>
+    <span>💧 <b id="ws-rh">—</b>%</span>
+  </div>
+
+  <!-- Risk panel -->
+  <div id="risk-panel">
+    <div class="risk-sect">
+      <h3>Threat Level</h3>
+      <span id="threat-badge">MONITOR</span>
+      <div class="risk-row" style="margin-top:6px"><span>Elapsed</span><b id="rp-elapsed">—</b></div>
+      <div class="risk-row"><span>Active</span><b id="rp-active">— ha</b></div>
+      <div class="risk-row"><span>Burned</span><b id="rp-burned">— ha</b></div>
+    </div>
+    <div class="risk-sect">
+      <h3>Rate of Spread m/min</h3>
+      <div class="arc-center">
+        <svg id="compass-svg" width="110" height="110" viewBox="0 0 110 110">
+          <circle cx="55" cy="55" r="48" fill="none" stroke="#313244" stroke-width="1"/>
+          <circle cx="55" cy="55" r="2.5" fill="#585b70"/>
+          <text x="55" y="11" text-anchor="middle" font-size="8" fill="#585b70">N</text>
+          <text x="101" y="58" text-anchor="middle" font-size="8" fill="#585b70">E</text>
+          <text x="55" y="106" text-anchor="middle" font-size="8" fill="#585b70">S</text>
+          <text x="9" y="58" text-anchor="middle" font-size="8" fill="#585b70">W</text>
+          <line id="ros-n" x1="55" y1="55" x2="55" y2="55" stroke="#89b4fa" stroke-width="3" stroke-linecap="round"/>
+          <line id="ros-e" x1="55" y1="55" x2="55" y2="55" stroke="#89b4fa" stroke-width="3" stroke-linecap="round"/>
+          <line id="ros-s" x1="55" y1="55" x2="55" y2="55" stroke="#89b4fa" stroke-width="3" stroke-linecap="round"/>
+          <line id="ros-w" x1="55" y1="55" x2="55" y2="55" stroke="#89b4fa" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:#6c7086">
+        <span>N:<b id="ros-n-val">0</b></span>
+        <span>E:<b id="ros-e-val">0</b></span>
+        <span>S:<b id="ros-s-val">0</b></span>
+        <span>W:<b id="ros-w-val">0</b></span>
+      </div>
+    </div>
+    <div class="risk-sect">
+      <h3>Burned Area</h3>
+      <div class="arc-center">
+        <svg width="80" height="80" viewBox="0 0 80 80">
+          <circle cx="40" cy="40" r="30" fill="none" stroke="#313244" stroke-width="8"/>
+          <circle id="arc-circle" cx="40" cy="40" r="30" fill="none"
+                  stroke="#f38ba8" stroke-width="8"
+                  stroke-dasharray="188.5" stroke-dashoffset="188.5"
+                  stroke-linecap="round" transform="rotate(-90 40 40)"
+                  style="transition:stroke-dashoffset 1s ease"/>
+          <text id="arc-text" x="40" y="45" text-anchor="middle" font-size="10" fill="#cdd6f4">0 ha</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating action buttons -->
+  <button class="fab" id="risk-toggle" onclick="toggleRiskPanel()">⚡ Risk</button>
+  <button class="fab" id="btn-wind"    onclick="toggleWind()">💨 Wind</button>
+  <button class="fab" id="btn-mute"    onclick="toggleMute()">🔊</button>
+
+  <!-- Timeline bar -->
+  <div id="timeline-bar">
+    <div id="tl-stats">
+      <span>⏱ <b id="tl-elapsed">T+00:00</b></span>
+      <span>🕐 <b id="tl-wallclock">—</b></span>
+      <span>🔥 Active <b id="tl-active">—</b> ha</span>
+      <span>🖤 Burned <b id="tl-burned">—</b> ha</span>
+    </div>
+    <input type="range" id="scrubber" min="0" max="0" value="0" oninput="onScrub(this.value)"/>
+    <div id="tl-days"></div>
+  </div>
+
+  <!-- Control panel -->
+  <div id="panel">
+    <h1><span class="flame">🔥</span> WILSON Sandbox</h1>
+
+    <div class="sect-label">Weather</div>
+    <div class="row">
+      <label>Wind speed</label>
+      <input type="number" id="wind-speed" value="5" min="0" max="50" step="0.5" />
+      <span class="unit">m/s</span>
+    </div>
+    <div class="row">
+      <label>Wind direction</label>
+      <input type="number" id="wind-dir" value="330" min="0" max="360" step="1" />
+      <span class="unit">°</span>
+    </div>
+    <div class="row">
+      <label>Temperature</label>
+      <input type="number" id="temperature" value="35" min="-10" max="55" step="1" />
+      <span class="unit">°C</span>
+    </div>
+    <div class="row">
+      <label>Humidity</label>
+      <input type="number" id="humidity" value="25" min="1" max="100" step="1" />
+      <span class="unit">%</span>
+    </div>
+    <div class="row">
+      <label>Bbox half-width</label>
+      <input type="number" id="bbox" value="0.125" min="0.05" max="2.0" step="0.05" />
+      <span class="unit">°</span>
+    </div>
+    <div class="row">
+      <label>Date (hourly wx)</label>
+      <input type="date" id="date-start" />
+      <span class="unit"></span>
+    </div>
+    <div class="row">
+      <label>Ignition time</label>
+      <input type="time" id="ignition-time" value="14:00" />
+      <span class="unit">UTC</span>
+    </div>
+
+    <div class="sect-label">Tool</div>
+    <div id="mode-toggle">
+      <button id="btn-cursor"      class="active-cursor"  onclick="setMode('cursor')">👆 Cursor</button>
+      <button id="btn-ignite"                             onclick="setMode('ignite')">🔥 Ignite</button>
+      <button id="btn-water"                              onclick="setMode('water')">💧 Water</button>
+      <button id="btn-containment"                        onclick="setMode('containment')">🚒 Contain</button>
+      <button id="btn-mask"                               onclick="setMode('mask')">🎯 Mask</button>
+    </div>
+    <button class="btn" id="btn-apply-containment" onclick="applyContainmentLine()" style="background:#f9e2af;color:#1e1e2e;display:none">Deploy Containment Line</button>
+    <button class="btn" id="btn-close-mask"        onclick="closeMaskPolygon()">✔ Close Polygon</button>
+    <button class="btn" id="btn-clear-mask"        onclick="clearMask()">✕ Clear Mask</button>
+
+    <!-- Water brush controls (shown when mode=water) -->
+    <div id="brush-controls">
+      <div class="sect-label">Brush Settings</div>
+      <div class="ctrl-row">
+        <label>Radius</label>
+        <input type="range" id="brush-radius" min="50" max="2000" value="200" step="50"
+               oninput="_onBrushRadiusChange(this.value)">
+        <span class="cval" id="brush-radius-val">200 m</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Intensity</label>
+        <input type="range" id="brush-intensity" min="0.1" max="3" value="1" step="0.1"
+               oninput="document.getElementById('brush-intensity-val').textContent=(+this.value).toFixed(1)">
+        <span class="cval" id="brush-intensity-val">1.0</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Falloff</label>
+        <input type="range" id="brush-falloff" min="0.2" max="3" value="0.8" step="0.1"
+               oninput="document.getElementById('brush-falloff-val').textContent=(+this.value).toFixed(1)">
+        <span class="cval" id="brush-falloff-val">0.8</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Hardness</label>
+        <input type="range" id="brush-hardness" min="0" max="0.95" value="0.5" step="0.05"
+               oninput="document.getElementById('brush-hardness-val').textContent=(+this.value).toFixed(2)">
+        <span class="cval" id="brush-hardness-val">0.50</span>
+      </div>
+    </div>
+
+    <!-- Containment line controls (shown when mode=containment) -->
+    <div id="containment-controls">
+      <div class="sect-label">Containment Settings</div>
+      <div class="ctrl-row">
+        <label>Strength</label>
+        <input type="range" id="ct-strength" min="0.1" max="1" value="0.7" step="0.05"
+               oninput="document.getElementById('ct-strength-val').textContent=Math.round(+this.value*100)+'%'">
+        <span class="cval" id="ct-strength-val">70%</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Effect radius</label>
+        <input type="range" id="ct-radius" min="20" max="600" value="150" step="20"
+               oninput="document.getElementById('ct-radius-val').textContent=this.value+'m'">
+        <span class="cval" id="ct-radius-val">150m</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Water applied</label>
+        <input type="range" id="ct-water" min="0" max="2" value="0.5" step="0.1"
+               oninput="document.getElementById('ct-water-val').textContent=(+this.value).toFixed(1)">
+        <span class="cval" id="ct-water-val">0.5</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Humidity boost</label>
+        <input type="range" id="ct-humidity" min="0" max="0.25" value="0.05" step="0.01"
+               oninput="document.getElementById('ct-humidity-val').textContent=(+this.value*100).toFixed(0)+'%'">
+        <span class="cval" id="ct-humidity-val">5%</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Crew lifetime</label>
+        <input type="range" id="ct-decay" min="0" max="12" value="2" step="0.5"
+               oninput="document.getElementById('ct-decay-val').textContent=(+this.value>0?(+this.value).toFixed(1)+'h':'∞')">
+        <span class="cval" id="ct-decay-val">2.0h</span>
+      </div>
+    </div>
+
+    <div class="sect-label">Ignition Points (<span id="ign-count">0</span>)</div>
+    <div id="ign-list">None yet — click the map in Ignite mode.</div>
+
+    <button class="btn" id="btn-run"    onclick="runSimulation()">▶ Run Simulation</button>
+    <button class="btn" id="btn-pause"  onclick="pauseSim()">⏸ Pause</button>
+    <button class="btn" id="btn-resume" onclick="resumeSim()">▶ Resume</button>
+
+    <div class="speed-row">
+      <label>Speed</label>
+      <input type="range" id="speed-slider" min="1" max="10" step="1" value="1"
+             oninput="onSpeedChange(this.value)" />
+      <span class="speed-val" id="speed-val">1×</span>
+    </div>
+
+    <button class="btn" id="btn-clear" onclick="clearAll()">🗑 Clear All</button>
+
+    <div class="sect-label" style="margin-top:10px">🔬 Optimizer</div>
+    <div style="font-size:10px;color:#585b70;margin-bottom:6px;line-height:1.4">
+      Draw a 🎯 Mask (ground-truth perimeter), enter fire age, place 🔥 ignition points, then run.
+    </div>
+    <div class="opt-row" id="opt-elapsed-row" style="display:none">
+      <label>Fire age at mask</label>
+      <input type="number" id="opt-elapsed-h" value="6"  min="0" max="168" step="1"
+             title="Hours since ignition" style="width:42px"/> h
+      <input type="number" id="opt-elapsed-m" value="0" min="0" max="59"  step="5"
+             title="Minutes" style="width:38px"/> m
+    </div>
+    <div class="opt-row">
+      <label>Particles</label>
+      <input type="number" id="opt-particles" value="20" min="4" max="100" step="1"/>
+    </div>
+    <div class="opt-row">
+      <label>Iterations</label>
+      <input type="number" id="opt-iterations" value="12" min="3" max="50" step="1"/>
+    </div>
+    <button class="btn" id="btn-run-opt" onclick="runOptimizer()" disabled>🔬 Run Optimizer</button>
+    <div id="opt-result-box"></div>
+
+    <!-- Continue-from-optimizer panel — shown after optimizer completes -->
+    <div id="opt-continue">
+      <div class="oc-title">▶ Continue Simulation</div>
+
+      <!-- Mode selector -->
+      <div style="display:flex;gap:3px;margin-bottom:5px">
+        <button id="oc-btn-gt" class="oc-mode-btn active"
+                onclick="setOcMode('ground_truth')">🎯 Ground Truth</button>
+        <button id="oc-btn-bs" class="oc-mode-btn"
+                onclick="setOcMode('best_params_sim')">🔬 Best IoU Sim</button>
+      </div>
+      <div id="oc-gt-desc" class="oc-desc">
+        Polygon edges → burning. Interior → already burned. Fire continues outward.
+      </div>
+      <div id="oc-bs-desc" class="oc-desc" style="display:none">
+        Runs with optimizer parameters for the fire age you set, then continues.
+      </div>
+      <div id="oc-gt-missing">⚠ No ground-truth mask drawn. Switch to Mask mode and close a polygon first.</div>
+
+      <!-- Toggles -->
+      <div class="oc-check-row">
+        <input type="checkbox" id="oc-use-params" checked>
+        <label for="oc-use-params">Use optimizer parameters</label>
+      </div>
+      <div class="oc-check-row">
+        <input type="checkbox" id="oc-use-mc" checked>
+        <label for="oc-use-mc">Include microclimate data</label>
+      </div>
+
+      <!-- IoU warning badge -->
+      <div id="oc-iou-warn"></div>
+
+      <button class="btn" id="oc-btn-start" onclick="startOptimizerContinueSim()"
+              style="background:#a6e3a1;color:#1e1e2e;margin-top:3px">
+        ▶ Continue Simulation
+      </button>
+    </div>
+
+    <!-- Microclimate memory panel — shows after first simulation completes -->
+    <div id="mc-panel">
+      <div class="mc-title">🧠 Microclimate Memory</div>
+      <div class="mc-row">
+        <span>Simulation runs</span>
+        <b id="mc-runs-val">0</b>
+      </div>
+      <div id="mc-stats-block" class="mc-stats" style="display:none">
+        Ign.freq <b id="mc-ign-val">—</b> ·
+        ROS ×<b id="mc-ros-val">—</b> ·
+        Wind ×<b id="mc-wind-val">—</b>
+      </div>
+      <div id="mc-no-data">Run a simulation to build spatial fire memory.</div>
+      <div id="mc-opt-badge">✓ Optimizer will use this data on next run</div>
+    </div>
+
+    <div id="status" class="info">Click the map to place ignition points.</div>
+    <div id="stats">
+      <span>Step <b id="stat-step">—</b></span>
+      <span>Active <b id="stat-active">—</b> ha</span>
+      <span>Burned <b id="stat-burned">—</b> ha</span>
+    </div>
+  </div>
+
+  <!-- Debug overlay -->
+  <div id="dbg"></div>
+
+  <!-- Events panel -->
+  <div id="events-panel">
+    <div id="events-hdr" onclick="expandEventsPanel()">
+      <span>&#x1F4CB; Fire Events</span>
+      <button id="ev-clear-btn" onclick="toggleEventsPanel(event)" title="Minimize fire info">—</button>
+    </div>
+    <div id="events-list"></div>
+  </div>
+
+  <script>
+    // ── Debug ─────────────────────────────────────────────────────────────────
+    (function () {
+      var el = document.getElementById("dbg");
+      window._dbg = function (msg, color) {
+        var line = document.createElement("div");
+        line.style.color = color || "#a6e3a1";
+        line.textContent = "[" + new Date().toLocaleTimeString() + "] " + msg;
+        el.appendChild(line);
+        el.scrollTop = el.scrollHeight;
+        console.log(msg);
+      };
+      window.onerror = function (msg, src, line) {
+        window._dbg("JS ERROR: " + msg + " (" + src + ":" + line + ")", "#f38ba8");
+      };
+      window.addEventListener("unhandledrejection", function (e) {
+        window._dbg("PROMISE: " + e.reason, "#fab387");
+      });
+      _dbg("Page loaded — MapLibre " + maplibregl.version);
+    }());
+
+    // ── Constants ─────────────────────────────────────────────────────────────
+    var SRC_BURNING     = "fire-burning-src";
+    var SRC_BURNED      = "fire-burned-src";
+    var SRC_IGNITE      = "ignition-src";
+
+    var SRC_WATER       = "water-src";
+
+    var SRC_VEGETATION  = "vegetation-src";
+    var SRC_MASK        = "truth-mask-src";
+    var SRC_MASK_PREV   = "truth-mask-preview-src";
+    var SRC_ENSEMBLE    = "ensemble-src";
+    var TILE_URL        = "https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}.jpg?api_key=42d95708-abc1-48a0-882c-c13e72274056";
+    var WS_URL          = "ws://localhost:8765";
+    var _activeMapTab   = "satellite";
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    var ws                = null;
+    var simRunning        = false;
+    var mode              = "cursor";
+    var _cellM            = 50;    // metres per cell (updated from init_ack)
+
+    // Water brush state
+    var _waterBrushDown   = false;
+    var _lastBrushSend    = 0;
+    var _lastBrushLat     = null;   // last applied brush lat (for interpolation)
+    var _lastBrushLng     = null;
+
+    // Containment line state (replaces firebreak + suppression)
+    var containmentPoints        = [];   // in-progress polyline [lng, lat]
+    var committedContainmentLines= [];   // [{points, strength, createdAtMs, decayMs, effectRadius}]
+
+    // Grid dimensions — received from init_ack, used for client-side rasterization
+    var _simRows = 0;
+    var _simCols = 0;
+
+    // Rect selection state (cursor mode, shift+drag)
+    var _rectSelecting = false;
+    var _rectStart     = null;   // {lng, lat}
+    var _rectEnd       = null;
+
+    // Microclimate knowledge summary (received from server)
+    var _microclimateSummary = null;
+
+    // Brush cursor ring element reference
+    var _brushRing = null;
+
+    // ── Events panel state ────────────────────────────────────────────────────
+    var _evLog = []; // [{time,icon,type,msg}]
+
+    function _addEvent(type, icon, text) {
+      var now = new Date();
+      var ts  = now.toLocaleTimeString('en-GB',
+                  {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      _evLog.push({ts: ts, type: type, icon: icon, msg: text});
+      var list = document.getElementById('events-list');
+      if (!list) return;
+      var div = document.createElement('div');
+      div.className = 'ev ev-' + type;
+      div.innerHTML = '<span class="ev-t">' + ts + '</span>' +
+                      '<span class="ev-icon">' + icon + '</span>' +
+                      '<span class="ev-msg">' + text + '</span>';
+      // Append new event and trim to max 3 visible entries
+      list.appendChild(div);
+      // Keep only latest 3 events in DOM
+      while (list.children.length > 3) {
+        list.removeChild(list.firstChild);
+        _evLog.shift();
+      }
+      // Auto-scroll to bottom (latest)
+      list.scrollTop = list.scrollHeight;
+    }
+
+    function clearEvents() {
+      _evLog = [];
+      var list = document.getElementById('events-list');
+      if (list) list.innerHTML = '';
+    }
+
+    function _updateEventsPanelBtn() {
+      var btn = document.getElementById('ev-clear-btn');
+      var panel = document.getElementById('events-panel');
+      if (!btn || !panel) return;
+      var collapsed = panel.classList.contains('collapsed');
+      btn.textContent = collapsed ? '▾' : '—';
+      btn.title = collapsed ? 'Expand fire info' : 'Minimize fire info';
+    }
+
+    function collapseEventsPanel() {
+      var panel = document.getElementById('events-panel');
+      if (!panel) return;
+      panel.classList.add('collapsed');
+      _updateEventsPanelBtn();
+    }
+
+    function expandEventsPanel() {
+      var panel = document.getElementById('events-panel');
+      if (!panel || !panel.classList.contains('collapsed')) return;
+      panel.classList.remove('collapsed');
+      _updateEventsPanelBtn();
+    }
+
+    function toggleEventsPanel(e) {
+      if (e && e.stopPropagation) e.stopPropagation();
+      var panel = document.getElementById('events-panel');
+      if (!panel) return;
+      panel.classList.toggle('collapsed');
+      _updateEventsPanelBtn();
+    }
+    var ignitionPoints    = [];
+    var waterDrops        = [];
+    var _fireOverlayReady = false;
+    var _fireBbox         = null;
+    var _dtMinutes        = 0.05;
+    var _initTime         = null;
+    var _ignitionWallHour = 14;
+    var _windUSmoke       = 0;
+    var _windVSmoke       = 0;
+    var _windRAF          = null;
+    var _smokeRAF         = null;
+    var _windVisible      = false;
+    var _muted            = false;
+    var _audioCtx         = null;
+    var _audioMasterGain  = null;
+    var _crackleGain      = null;
+    var _fireBedGain      = null;
+    var _windGain         = null;
+    var _crackleTimer     = null;
+    var _particles        = [];
+    var _windU20          = null;
+    var _windV20          = null;
+    var _windBbox         = null;
+    var _windRows         = 20;
+    var _windCols         = 20;
+    var _windParticles    = [];
+    // ── Optimizer / mask state ────────────────────────────────────────────────
+    var maskPoints        = [];    // [lng, lat] vertices while drawing
+    var maskCommitted     = false; // true once polygon is closed
+    var _optimizerRunning = false;
+    var _ensembleVisible  = false;
+    var wsOpt             = null;  // separate WebSocket for the optimizer session
+    window._simHistory    = null;
+
+    // ── Utility ───────────────────────────────────────────────────────────────
+    function emptyFC() {
+      return { type: "FeatureCollection", features: [] };
+    }
+
+    function _fmtMin(totalMin) {
+      if (totalMin == null) return "—";
+      var h = Math.floor(totalMin / 60).toString().padStart(2, "0");
+      var m = Math.floor(totalMin % 60).toString().padStart(2, "0");
+      return h + ":" + m;
+    }
+
+    // wall_clock_minutes from server = ignition_wall_hour*60 + sim_minutes (absolute UTC)
+    function _fmtWallClock(wallClockMinutes) {
+      if (wallClockMinutes == null) return "—";
+      var total = Math.round(wallClockMinutes) % (24 * 60);
+      return _fmtMin(total);
+    }
+
+    function setStatus(msg, cls) {
+      var el = document.getElementById("status");
+      el.textContent = msg;
+      el.className   = cls || "info";
+    }
+
+    function _prepareOverlayCtx(canvasId) {
+      var canvas = document.getElementById(canvasId);
+      var mapEl = map.getContainer();
+      var cssW = mapEl.clientWidth;
+      var cssH = mapEl.clientHeight;
+      var dpr = Math.max(1, window.devicePixelRatio || 1);
+      var pxW = Math.round(cssW * dpr);
+      var pxH = Math.round(cssH * dpr);
+      if (canvas.width !== pxW || canvas.height !== pxH) {
+        canvas.width = pxW;
+        canvas.height = pxH;
+        canvas.style.width = cssW + "px";
+        canvas.style.height = cssH + "px";
+      }
+      var ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+      return { ctx: ctx, width: cssW, height: cssH };
+    }
+
+    // ── MapLibre ──────────────────────────────────────────────────────────────
+    var map = new maplibregl.Map({
+      container: "map",
+      style: {
+        version: 8,
+        sources: {
+          satellite: {
+            type: "raster",
+            tiles: [TILE_URL],
+            tileSize: 256,
+            maxzoom: 20,
+            attribution: "© Stadia Maps, © CNES/Airbus",
+          },
+        },
+        layers: [{ id: "satellite", type: "raster", source: "satellite" }],
+      },
+      center: [23.0, 38.5],
+      zoom: 7,
+      attributionControl: false,
+    });
+
+    map.addControl(new maplibregl.NavigationControl(), "bottom-right");
+    map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+
+    map.on("error", function (e) {
+      _dbg("MAP ERROR: " + ((e.error && e.error.message) || JSON.stringify(e)), "#f38ba8");
+    });
+
+    map.on("load", function () {
+      _dbg("Map loaded.", "#89dceb");
+      _setupMapLayers();
+      if (!_smokeRAF) _animateSmoke();
+    });
+    map.on("movestart", function () {
+      // Screen-space particles lose alignment while panning/zooming.
+      _particles.length = 0;
+    });
+
+    // ── Map layer setup ───────────────────────────────────────────────────────
+    var SRC_CONTAINMENT = "containment-src";
+    var SRC_CONTAINMENT_MARKERS = "containment-markers-src";
+    var SRC_RECT_SEL    = "rect-sel-src";
+
+    function _setupMapLayers() {
+      map.addSource(SRC_IGNITE,     { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_WATER,      { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_CONTAINMENT,{ type: "geojson", data: emptyFC() });
+      map.addSource(SRC_CONTAINMENT_MARKERS, { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_RECT_SEL,   { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_VEGETATION, { type: "geojson", data: emptyFC() });
+
+      // Containment line layer (dashed amber)
+      map.addLayer({
+        id: "containment-layer", type: "line", source: SRC_CONTAINMENT,
+        paint: {
+          "line-color":     ["get", "color"],
+          "line-width":     ["get", "width"],
+          "line-opacity":   ["get", "opacity"],
+          "line-dasharray": [4, 3],
+        },
+      });
+      // Containment markers layer (truck emoji text)
+      map.addLayer({
+        id: "containment-markers", type: "symbol", source: SRC_CONTAINMENT_MARKERS,
+        layout: {
+          "text-field":          ["get", "icon"],
+          "text-size":           14,
+          "text-anchor":         "center",
+          "text-allow-overlap":  true,
+          "symbol-placement":    "point",
+        },
+        paint: {
+          "text-opacity": ["get", "opacity"],
+        },
+      });
+      // Rect selection layer (dashed purple)
+      map.addLayer({
+        id: "rect-sel-layer", type: "line", source: SRC_RECT_SEL,
+        paint: {
+          "line-color": "#cba6f7", "line-width": 2, "line-opacity": 0.9,
+          "line-dasharray": [3, 2],
+        },
+      });
+      map.addLayer({
+        id: "rect-sel-fill", type: "fill", source: SRC_RECT_SEL,
+        paint: { "fill-color": "#cba6f7", "fill-opacity": 0.05 },
+      });
+
+      // Vegetation layer — hidden until tab is switched
+      map.addLayer({
+        id: "vegetation-layer", type: "fill", source: SRC_VEGETATION,
+        layout: { visibility: "none" },
+        paint: {
+          "fill-color":   ["get", "color"],
+          "fill-opacity": 0.88,
+        },
+      });
+      map.addLayer({
+        id: "vegetation-outline", type: "line", source: SRC_VEGETATION,
+        layout: { visibility: "none" },
+        paint: { "line-color": "#000000", "line-width": 0.05, "line-opacity": 0.04 },
+      });
+
+      map.addLayer({
+        id: "ignition-layer", type: "circle", source: SRC_IGNITE,
+        paint: {
+          "circle-radius": 7, "circle-color": "#f38ba8",
+          "circle-stroke-width": 2, "circle-stroke-color": "#1e1e2e",
+        },
+      });
+      map.addLayer({
+        id: "water-layer", type: "fill", source: SRC_WATER,
+        paint: { "fill-color": "#89dceb", "fill-opacity": 0.45 },
+      });
+      map.addLayer({
+        id: "water-outline", type: "line", source: SRC_WATER,
+        paint: { "line-color": "#89dceb", "line-width": 1.5 },
+      });
+
+      // ── Ground-truth mask layers ──────────────────────────────────────────
+      map.addSource(SRC_MASK,      { type: "geojson", data: emptyFC() });
+      map.addSource(SRC_MASK_PREV, { type: "geojson", data: emptyFC() });
+
+      map.addLayer({
+        id: "mask-fill", type: "fill", source: SRC_MASK,
+        paint: { "fill-color": "#a6e3a1", "fill-opacity": 0.18 },
+      });
+      map.addLayer({
+        id: "mask-outline", type: "line", source: SRC_MASK,
+        paint: { "line-color": "#a6e3a1", "line-width": 2.5, "line-dasharray": [4, 2] },
+      });
+      map.addLayer({
+        id: "mask-preview-line", type: "line", source: SRC_MASK_PREV,
+        filter: ["==", "$type", "LineString"],
+        paint: { "line-color": "#a6e3a1", "line-width": 1.5,
+                 "line-dasharray": [3, 3], "line-opacity": 0.75 },
+      });
+      map.addLayer({
+        id: "mask-preview-dots", type: "circle", source: SRC_MASK_PREV,
+        filter: ["==", "$type", "Point"],
+        paint: { "circle-radius": 4, "circle-color": "#a6e3a1",
+                 "circle-stroke-width": 1.5, "circle-stroke-color": "#1e1e2e" },
+      });
+
+      map.on("click", onMapClick);
+      setStatus("Ready. Drop ignition points then click Run Simulation.");
+      _dbg("Map layers set up.", "#a6e3a1");
+    }
+
+    // ── 3-D view tab: open mesh popup centred on ignition AABB ───────────────
+    function request3DView() {
+      if (!ignitionPoints || ignitionPoints.length === 0) {
+        setStatus("Place at least one ignition point first.", "err");
+        return;
+      }
+
+      // ── Compute AABB + 2 km offset ──────────────────────────────────────────
+      var lats = ignitionPoints.map(function(p){ return p.lat; });
+      var lngs = ignitionPoints.map(function(p){ return p.lng; });
+      var lat_min = Math.min.apply(null, lats);
+      var lat_max = Math.max.apply(null, lats);
+      var lng_min = Math.min.apply(null, lngs);
+      var lng_max = Math.max.apply(null, lngs);
+      var c_lat   = (lat_min + lat_max) / 2;
+      var c_lng   = (lng_min + lng_max) / 2;
+
+      var cosLat  = Math.cos(c_lat * Math.PI / 180);
+      var w_m     = (lng_max - lng_min) * 111320 * cosLat;
+      var h_m     = (lat_max - lat_min) * 111320;
+
+      // Single point → 4 km square;  multiple → AABB + 2 km each side
+      var extent_m = (ignitionPoints.length === 1)
+                     ? 4000
+                     : Math.max(w_m, h_m) + 4000;   // +2 km per side
+
+      // ── Centre the popup on screen ─────────────────────────────────────────
+      // openMeshPopup positions as:  left = screenX+18,  top = screenY-70
+      var pw = 680, ph = 580;
+      var sx = (window.innerWidth  - pw) / 2 - 18;
+      var sy = (window.innerHeight - ph) / 2 + 70;
+
+      setStatus("Loading 3D terrain (" + (extent_m/1000).toFixed(1) + " km sq)…", "info");
+      _sim3d.fromTab  = true;   // flag: arm fire overlay when carousel renders
+      _sim3d.active   = false;
+      openMeshPopup(c_lat, c_lng, sx, sy, extent_m, pw, ph);
+    }
+
+    function _set3DButtonState(running) {
+      var btn = document.getElementById("tab-3d-view");
+      if (!btn) return;
+      btn.textContent = "🧊 3D View";
+      if (running) btn.classList.add("sim3d-live");
+      else         btn.classList.remove("sim3d-live");
+    }
+
+    // ── Map tab switching ─────────────────────────────────────────────────────
+    function setMapTab(tab) {
+      _activeMapTab = tab;
+      document.getElementById("tab-satellite").classList.toggle("active", tab === "satellite");
+      document.getElementById("tab-vegetation").classList.toggle("active", tab === "vegetation");
+
+      var satVis = tab === "satellite" ? "visible" : "none";
+      var vegVis = tab === "vegetation" ? "visible" : "none";
+
+      if (map.getLayer("satellite"))          map.setLayoutProperty("satellite",          "visibility", satVis);
+      if (map.getLayer("vegetation-layer"))   map.setLayoutProperty("vegetation-layer",   "visibility", vegVis);
+      if (map.getLayer("vegetation-outline")) map.setLayoutProperty("vegetation-outline", "visibility", vegVis);
+
+      // Fire layers stay visible regardless of tab
+      var legend = document.getElementById("veg-legend");
+      if (tab === "vegetation") legend.classList.add("visible");
+      else legend.classList.remove("visible");
+    }
+
+    // ── Vegetation map init (called with init_ack.geojson_fuel_map) ───────────
+    function _initVegMap(geojsonFuelMap) {
+      if (!geojsonFuelMap || !geojsonFuelMap.features) return;
+      if (map.getSource(SRC_VEGETATION)) {
+        map.getSource(SRC_VEGETATION).setData(geojsonFuelMap);
+      }
+
+      // Build legend from unique fuel names in the data
+      var seen = {};
+      geojsonFuelMap.features.forEach(function(f) {
+        var fuel = f.properties && f.properties.fuel;
+        var color = f.properties && f.properties.color;
+        if (fuel && color && !seen[fuel]) {
+          seen[fuel] = color;
+        }
+      });
+
+      var legend = document.getElementById("veg-legend");
+      legend.innerHTML = "";
+      Object.keys(seen).sort().forEach(function(name) {
+        var item = document.createElement("div");
+        item.className = "leg-item";
+        item.innerHTML = '<div class="leg-swatch" style="background:' + seen[name] + '"></div>'
+                       + '<span>' + name.replace(/_/g, " ") + '</span>';
+        legend.appendChild(item);
+      });
+
+      _dbg("Vegetation map loaded (" + geojsonFuelMap.features.length + " features)", "#a6e3a1");
+    }
+
+    // ── Fire GeoJSON overlay ──────────────────────────────────────────────────
+    function _initFireOverlay(rows, cols, lat_min, lat_max, lon_min, lon_max) {
+      _fireBbox = { lat_min: lat_min, lat_max: lat_max, lon_min: lon_min, lon_max: lon_max };
+
+      if (map.getLayer("fire-burning-layer")) map.removeLayer("fire-burning-layer");
+      if (map.getLayer("fire-burned-layer"))  map.removeLayer("fire-burned-layer");
+      if (map.getSource(SRC_BURNING))          map.removeSource(SRC_BURNING);
+      if (map.getSource(SRC_BURNED))           map.removeSource(SRC_BURNED);
+
+      // Charred ground beneath active fire (never cleared, only updated)
+      map.addSource(SRC_BURNED, { type: "geojson", data: emptyFC() });
+      map.addLayer({
+        id: "fire-burned-layer", type: "fill", source: SRC_BURNED,
+        paint: { "fill-color": "#281405", "fill-opacity": 0.82 },
+      });
+
+      map.addSource(SRC_BURNING, { type: "geojson", data: emptyFC() });
+      map.addLayer({
+        id: "fire-burning-layer", type: "fill", source: SRC_BURNING,
+        paint: { "fill-color": "#ff5000", "fill-opacity": 0.75 },
+      });
+
+      _fireOverlayReady = true;
+      _dbg("Fire GeoJSON overlay ready (" + cols + "x" + rows + ")", "#a6e3a1");
+    }
+
+    function renderFireFrame(msg) {
+      if (!_fireOverlayReady) return;
+      if (msg.geojson_burning) map.getSource(SRC_BURNING).setData(msg.geojson_burning);
+      if (msg.geojson_burned)  map.getSource(SRC_BURNED).setData(msg.geojson_burned);
+      map.triggerRepaint();
+    }
+
+    // Extract centroid screen coords from GeoJSON FeatureCollection for glow/smoke.
+    function _geoJsonCentroids(gjson, maxPoints) {
+      if (!gjson || !gjson.features || !gjson.features.length) return [];
+      var pts = [];
+      for (var fi = 0; fi < gjson.features.length; fi++) {
+        var feat = gjson.features[fi];
+        var geom = feat.geometry;
+        if (!geom) continue;
+        var polys = geom.type === "MultiPolygon" ? geom.coordinates
+                  : geom.type === "Polygon"       ? [geom.coordinates]
+                  : [];
+        for (var pi = 0; pi < polys.length; pi++) {
+          var poly = polys[pi];
+          if (!poly || !poly[0] || !poly[0].length) continue;
+          var ring   = poly[0];
+          var sumLon = 0, sumLat = 0;
+          for (var ri = 0; ri < ring.length; ri++) {
+            sumLon += ring[ri][0];
+            sumLat += ring[ri][1];
+          }
+          var cLon = sumLon / ring.length;
+          var cLat = sumLat / ring.length;
+          pts.push(map.project([cLon, cLat]));
+          if (pts.length >= maxPoints) return pts;
+        }
+      }
+      return pts;
+    }
+
+    function _geoJsonFrontPoints(gjson, maxPoints) {
+      if (!gjson || !gjson.features || !gjson.features.length) return [];
+      var pts = [];
+      for (var fi = 0; fi < gjson.features.length; fi++) {
+        var feat = gjson.features[fi];
+        var geom = feat.geometry;
+        if (!geom) continue;
+        var polys = geom.type === "MultiPolygon" ? geom.coordinates
+                  : geom.type === "Polygon"       ? [geom.coordinates]
+                  : [];
+        for (var pi = 0; pi < polys.length; pi++) {
+          var ring = polys[pi] && polys[pi][0];
+          if (!ring || ring.length < 4) continue;
+          var stride = Math.max(1, Math.floor(ring.length / 18));
+          for (var ri = 0; ri < ring.length; ri += stride) {
+            pts.push(map.project(ring[ri]));
+            if (pts.length >= maxPoints) return pts;
+          }
+        }
+      }
+      return pts;
+    }
+
+    // ── Atmospheric time-of-day overlay ──────────────────────────────────────
+    function _applyAtmoOverlay(minutesSinceIgnition) {
+      var wallHour;
+      if (_initTime) {
+        var wallMs = _initTime.getTime() + minutesSinceIgnition * 60000;
+        var d = new Date(wallMs);
+        wallHour = d.getUTCHours() + d.getUTCMinutes() / 60;
+      } else {
+        wallHour = (_ignitionWallHour + minutesSinceIgnition / 60) % 24;
+      }
+      var distFromNoon = Math.abs(wallHour - 12);
+      var darkness = Math.max(0, Math.min(1, (distFromNoon - 1) / 10));
+      var a = (darkness * 0.55).toFixed(3);
+      var r = Math.round(10 * darkness);
+      var g = Math.round(10 * darkness);
+      var b = Math.round(40 * darkness);
+      document.getElementById("atmo-overlay").style.backgroundColor =
+        "rgba(" + r + "," + g + "," + b + "," + a + ")";
+    }
+
+    // ── Fire glow canvas ──────────────────────────────────────────────────────
+    function _renderGlow(gjsonBurning) {
+      var prep = _prepareOverlayCtx("glow-canvas");
+      var ctx = prep.ctx;
+      if (!gjsonBurning || !gjsonBurning.features || !gjsonBurning.features.length) return;
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.shadowBlur = 14;
+      ctx.shadowColor = "rgba(255,140,30,0.35)";
+      ctx.fillStyle = "rgba(255,95,10,0.22)";
+
+      for (var fi = 0; fi < gjsonBurning.features.length; fi++) {
+        var geom = gjsonBurning.features[fi].geometry;
+        if (!geom) continue;
+        var polys = geom.type === "MultiPolygon" ? geom.coordinates
+                  : geom.type === "Polygon"       ? [geom.coordinates]
+                  : [];
+        for (var pi = 0; pi < polys.length; pi++) {
+          var ring = polys[pi] && polys[pi][0];
+          if (!ring || ring.length < 4) continue;
+          ctx.beginPath();
+          for (var ri = 0; ri < ring.length; ri++) {
+            var p = map.project(ring[ri]);
+            if (ri === 0) ctx.moveTo(p.x, p.y);
+            else ctx.lineTo(p.x, p.y);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
+    // ── Smoke particle system ─────────────────────────────────────────────────
+    function _spawnSmoke(gjsonBurning) {
+      if (!_fireBbox) return;
+      var pts = _geoJsonFrontPoints(gjsonBurning, 140);
+      if (!pts.length) pts = _geoJsonCentroids(gjsonBurning, 80);
+      var N = Math.min(90, pts.length);
+      for (var k = 0; k < N; k++) {
+        var px = pts[Math.floor(Math.random() * pts.length)];
+        _particles.push({
+          x: px.x, y: px.y,
+          vx: _windUSmoke * 0.55 + (Math.random() - 0.5) * 1.2,
+          vy: -_windVSmoke * 0.55 - 0.9 + (Math.random() - 0.5) * 0.8,
+          life: 0, maxLife: 110 + Math.random() * 40,
+        });
+        if (_particles.length > 1600) _particles.splice(0, _particles.length - 1600);
+      }
+    }
+
+    function _animateSmoke() {
+      var prep = _prepareOverlayCtx("smoke-canvas");
+      var ctx = prep.ctx;
+      for (var i = _particles.length - 1; i >= 0; i--) {
+        var p = _particles[i];
+        p.x += p.vx; p.y += p.vy; p.life++;
+        if (p.life >= p.maxLife) { _particles.splice(i, 1); continue; }
+        var t      = p.life / p.maxLife;
+        var r2     = Math.round(90 + t * 85);
+        var g2     = Math.round(80 + t * 90);
+        var b2     = Math.round(70 + t * 100);
+        var a2     = (0.30 * (1 - t)).toFixed(3);
+        var radius = 3 + t * 18;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(" + r2 + "," + g2 + "," + b2 + "," + a2 + ")";
+        ctx.fill();
+      }
+      _smokeRAF = requestAnimationFrame(_animateSmoke);
+    }
+
+    // ── Animated wind streamlines ─────────────────────────────────────────────
+    function _spawnWindParticle() {
+      var wR = _windRows || 20;
+      var wC = _windCols || 20;
+      var ri  = Math.floor(Math.random() * wR);
+      var ci  = Math.floor(Math.random() * wC);
+      var lat = _windBbox.lat_min + (ri / (wR - 1)) * (_windBbox.lat_max - _windBbox.lat_min);
+      var lon = _windBbox.lon_min + (ci / (wC - 1)) * (_windBbox.lon_max - _windBbox.lon_min);
+      return {
+        lat: lat, lon: lon,
+        u: _windU20[ri * wC + ci],
+        v: _windV20[ri * wC + ci],
+        life: Math.random() * 70,
+        maxLife: 70 + Math.random() * 90,
+      };
+    }
+
+    function _initWindStreamlines(b64U, b64V, wRows, wCols, lat_min, lat_max, lon_min, lon_max) {
+      var bufU = Uint8Array.from(atob(b64U), function (c) { return c.charCodeAt(0); }).buffer;
+      var bufV = Uint8Array.from(atob(b64V), function (c) { return c.charCodeAt(0); }).buffer;
+      _windU20  = new Float32Array(bufU);
+      _windV20  = new Float32Array(bufV);
+      _windBbox = { lat_min: lat_min, lat_max: lat_max, lon_min: lon_min, lon_max: lon_max };
+      _windRows = wRows || 20;
+      _windCols = wCols || 20;
+      _windParticles.length = 0;
+      for (var i = 0; i < 280; i++) _windParticles.push(_spawnWindParticle());
+      _dbg("Wind streamlines init (" + _windRows + "x" + _windCols + ")", "#89dceb");
+    }
+
+    function _animateWind() {
+      var prep = _prepareOverlayCtx("wind-canvas");
+      var ctx = prep.ctx;
+      var w = prep.width, h = prep.height;
+      if (_windU20 && _windBbox) {
+        var latScale = 111_320;
+        var lonScale = 111_320 * Math.max(0.2, Math.cos(((_windBbox.lat_min + _windBbox.lat_max) * 0.5) * Math.PI / 180));
+        var advectSec = 0.7;
+        for (var i = 0; i < _windParticles.length; i++) {
+          var p = _windParticles[i];
+          var sc = map.project([p.lon, p.lat]);
+          var t = p.life / p.maxLife;
+          var alpha = Math.min(1, t * 3) * (1 - t) * 0.75;
+          var tipX = sc.x + p.u * 3.2;
+          var tipY = sc.y - p.v * 3.2;
+          ctx.globalAlpha  = alpha;
+          ctx.strokeStyle  = "#89dceb";
+          ctx.lineWidth    = 1.2;
+          ctx.beginPath();
+          ctx.moveTo(sc.x, sc.y);
+          ctx.lineTo(tipX, tipY);
+          ctx.stroke();
+          p.lat += (p.v * advectSec) / latScale;
+          p.lon += (p.u * advectSec) / lonScale;
+          p.life++;
+          if (p.life >= p.maxLife ||
+              p.lat < _windBbox.lat_min || p.lat > _windBbox.lat_max ||
+              p.lon < _windBbox.lon_min || p.lon > _windBbox.lon_max ||
+              sc.x < -30 || sc.y < -30 || sc.x > (w + 30) || sc.y > (h + 30)) {
+            _windParticles[i] = _spawnWindParticle();
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+      _windRAF = requestAnimationFrame(_animateWind);
+    }
+
+    function toggleWind() {
+      _windVisible = !_windVisible;
+      var canvas = document.getElementById("wind-canvas");
+      var btn    = document.getElementById("btn-wind");
+      if (_windVisible) {
+        canvas.style.display = "block";
+        btn.classList.add("on");
+        if (!_windRAF) _animateWind();
+      } else {
+        canvas.style.display = "none";
+        btn.classList.remove("on");
+        if (_windRAF) { cancelAnimationFrame(_windRAF); _windRAF = null; }
+        var ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+
+    // ── Hourly weather strip ──────────────────────────────────────────────────
+    function _showWeatherStrip(data) {
+      document.getElementById("weather-strip").classList.add("visible");
+      if (data.wind_speed_ms != null) {
+        document.getElementById("ws-wind").textContent = (+data.wind_speed_ms).toFixed(1);
+        var dirRad = ((+data.wind_direction) || 0) * Math.PI / 180;
+        _windUSmoke = (+data.wind_speed_ms) * Math.sin(dirRad);
+        _windVSmoke = (+data.wind_speed_ms) * Math.cos(dirRad);
+      }
+      if (data.wind_direction != null) {
+        document.getElementById("ws-arrow").style.transform =
+          "rotate(" + (+data.wind_direction) + "deg)";
+      }
+      if (data.temperature_c     != null) document.getElementById("ws-temp").textContent = (+data.temperature_c).toFixed(1);
+      if (data.relative_humidity != null) document.getElementById("ws-rh").textContent   = (+data.relative_humidity).toFixed(0);
+      if (data.simMinutes        != null) document.getElementById("ws-time").textContent      = "T+" + _fmtMin(data.simMinutes);
+      if (data.wall_clock_minutes != null) document.getElementById("ws-wallclock").textContent = _fmtWallClock(data.wall_clock_minutes) + " UTC";
+    }
+
+    // ── Stats + timeline bar ──────────────────────────────────────────────────
+    function updateStats(step, active, burned, minutesSinceIgnition, wallClockMinutes) {
+      document.getElementById("stat-step").textContent   = step   != null ? step              : "—";
+      document.getElementById("stat-active").textContent = active != null ? active.toFixed(1)  : "—";
+      document.getElementById("stat-burned").textContent = burned != null ? burned.toFixed(1)  : "—";
+
+      var bar = document.getElementById("timeline-bar");
+      if (step != null) {
+        bar.classList.add("visible");
+        document.getElementById("tl-active").textContent    = active  != null ? active.toFixed(1)                   : "—";
+        document.getElementById("tl-burned").textContent    = burned  != null ? burned.toFixed(1)                   : "—";
+        document.getElementById("tl-elapsed").textContent   = minutesSinceIgnition != null ? "T+" + _fmtMin(minutesSinceIgnition) : "T+00:00";
+        document.getElementById("tl-wallclock").textContent = wallClockMinutes     != null ? _fmtWallClock(wallClockMinutes) + " UTC" : "—";
+      } else {
+        bar.classList.remove("visible");
+      }
+    }
+
+    // ── Timeline scrubber ─────────────────────────────────────────────────────
+    function onScrub(val) {
+      if (simRunning) return;
+      var idx = parseInt(val, 10);
+      if (window._simHistory && window._simHistory.length > 0) {
+        var frame = window._simHistory[Math.min(idx, window._simHistory.length - 1)];
+        if (frame) _updateScrubFrame(frame);
+        return;
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "scrub", index: idx }));
+      }
+    }
+
+    function _setupScrubber(msg) {
+      var count = msg.count || 0;
+      var sc    = document.getElementById("scrubber");
+      sc.max    = Math.max(0, count - 1);
+      sc.value  = sc.max;
+      document.getElementById("timeline-bar").classList.add("visible");
+      if (msg.frames && msg.frames.length > 0) {
+        window._simHistory = msg.frames;
+        _updateScrubFrame(msg.frames[msg.frames.length - 1]);
+      }
+    }
+
+    function _updateScrubFrame(frame) {
+      renderFireFrame(frame);
+      var step    = frame.step || 0;
+      var elapsed = frame.minutes_since_ignition != null
+                  ? frame.minutes_since_ignition
+                  : step * _dtMinutes;
+      var wall    = frame.wall_clock_minutes;
+
+      document.getElementById("tl-elapsed").textContent   = "T+" + _fmtMin(elapsed);
+      document.getElementById("tl-wallclock").textContent = wall != null ? _fmtWallClock(wall) + " UTC" : "—";
+      document.getElementById("tl-active").textContent    = frame.active_ha != null ? frame.active_ha.toFixed(1) : "—";
+      document.getElementById("tl-burned").textContent    = frame.burned_ha != null ? frame.burned_ha.toFixed(1) : "—";
+
+      _updateRiskPanel(step, frame.active_ha, frame.burned_ha, elapsed,
+                       { N: 0, E: 0, S: 0, W: 0 });
+      _renderGlow(frame.geojson_burning);
+    }
+
+    // ── Risk dashboard panel ──────────────────────────────────────────────────
+    function _updateRiskPanel(step, active, burned, minutesSinceIgnition, ros) {
+      document.getElementById("rp-elapsed").textContent = minutesSinceIgnition != null ? "T+" + _fmtMin(minutesSinceIgnition) : "—";
+      document.getElementById("rp-active").textContent  = active != null ? active.toFixed(1) + " ha" : "— ha";
+      document.getElementById("rp-burned").textContent  = burned != null ? burned.toFixed(1) + " ha" : "— ha";
+
+      var badge      = document.getElementById("threat-badge");
+      var totalActive = active || 0;
+      var level = "monitor";
+      if      (totalActive > 200) level = "critical";
+      else if (totalActive >  80) level = "high";
+      else if (totalActive >  30) level = "elevated";
+      badge.className   = level;
+      badge.textContent = level.toUpperCase();
+
+      // Compass ROS arms
+      var maxRos = ros ? Math.max(ros.N || 0, ros.E || 0, ros.S || 0, ros.W || 0) : 0;
+      var scale  = maxRos > 0 ? 40 / maxRos : 0;
+      var cx = 55, cy = 55;
+      function setArm(id, dx, dy) {
+        var el = document.getElementById(id);
+        if (el) { el.setAttribute("x2", cx + dx); el.setAttribute("y2", cy + dy); }
+      }
+      if (ros) {
+        setArm("ros-n",  0,                    -(ros.N || 0) * scale);
+        setArm("ros-e",  (ros.E || 0) * scale,  0);
+        setArm("ros-s",  0,                     (ros.S || 0) * scale);
+        setArm("ros-w", -(ros.W || 0) * scale,  0);
+        document.getElementById("ros-n-val").textContent = (ros.N || 0).toFixed(1);
+        document.getElementById("ros-e-val").textContent = (ros.E || 0).toFixed(1);
+        document.getElementById("ros-s-val").textContent = (ros.S || 0).toFixed(1);
+        document.getElementById("ros-w-val").textContent = (ros.W || 0).toFixed(1);
+      }
+
+      // Arc chart (burned area)
+      var arc     = document.getElementById("arc-circle");
+      var arcText = document.getElementById("arc-text");
+      if (arc && burned != null) {
+        var frac = Math.min(1, burned / 1000);
+        arc.style.strokeDashoffset = (188.5 * (1 - frac)).toFixed(1);
+        arcText.textContent        = burned.toFixed(0) + " ha";
+      }
+    }
+
+    function toggleRiskPanel() {
+      document.getElementById("risk-panel").classList.toggle("open");
+      document.getElementById("risk-toggle").classList.toggle("on");
+    }
+
+    // ── Web Audio fire soundscape ─────────────────────────────────────────────
+    function _scheduleCrackle() {
+      if (!_audioCtx || !_crackleGain) return;
+      var now = _audioCtx.currentTime;
+      var burst = 0.01 + Math.random() * 0.06;
+      _crackleGain.gain.cancelScheduledValues(now);
+      _crackleGain.gain.setTargetAtTime(burst, now, 0.01);
+      _crackleGain.gain.setTargetAtTime(0.003, now + 0.05, 0.03);
+      _crackleTimer = setTimeout(_scheduleCrackle, 70 + Math.random() * 230);
+    }
+
+    function _initAudio() {
+      if (_audioCtx) {
+        if (!_crackleTimer) _scheduleCrackle();
+        return;
+      }
+      try {
+        _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        _audioMasterGain = _audioCtx.createGain();
+        _audioMasterGain.gain.value = 0.7;
+        _audioMasterGain.connect(_audioCtx.destination);
+
+        var bufLen = _audioCtx.sampleRate * 2;
+        var buffer = _audioCtx.createBuffer(1, bufLen, _audioCtx.sampleRate);
+        var data   = buffer.getChannelData(0);
+        for (var i = 0; i < bufLen; i++) data[i] = (Math.random() * 2 - 1);
+
+        var bedSrc = _audioCtx.createBufferSource();
+        bedSrc.buffer = buffer;
+        bedSrc.loop = true;
+        var bedLP = _audioCtx.createBiquadFilter();
+        bedLP.type = "lowpass";
+        bedLP.frequency.value = 1200;
+        _fireBedGain = _audioCtx.createGain();
+        _fireBedGain.gain.value = 0.0;
+        bedSrc.connect(bedLP);
+        bedLP.connect(_fireBedGain);
+        _fireBedGain.connect(_audioMasterGain);
+        bedSrc.start();
+
+        var crackleSrc = _audioCtx.createBufferSource();
+        crackleSrc.buffer = buffer;
+        crackleSrc.loop = true;
+        var crackleBP = _audioCtx.createBiquadFilter();
+        crackleBP.type = "bandpass";
+        crackleBP.frequency.value = 2100;
+        crackleBP.Q.value = 1.5;
+        _crackleGain = _audioCtx.createGain();
+        _crackleGain.gain.value = 0.0;
+        crackleSrc.connect(crackleBP);
+        crackleBP.connect(_crackleGain);
+        _crackleGain.connect(_audioMasterGain);
+        crackleSrc.start();
+
+        var windSrc = _audioCtx.createBufferSource();
+        windSrc.buffer = buffer;
+        windSrc.loop = true;
+        var windLP = _audioCtx.createBiquadFilter();
+        windLP.type = "lowpass";
+        windLP.frequency.value = 500;
+        _windGain = _audioCtx.createGain();
+        _windGain.gain.value = 0.0;
+        windSrc.connect(windLP);
+        windLP.connect(_windGain);
+        _windGain.connect(_audioMasterGain);
+        windSrc.start();
+
+        _scheduleCrackle();
+
+        _dbg("Audio context created.", "#a6adc8");
+      } catch (e) {
+        _dbg("Audio init failed: " + e, "#fab387");
+      }
+    }
+
+    function _updateAudio(activeHa) {
+      if (!_audioCtx || _muted) return;
+      var fireLevel = activeHa > 0 ? Math.min(1, activeHa / 320) : 0;
+      var windLevel = Math.min(1, Math.hypot(_windUSmoke || 0, _windVSmoke || 0) / 12);
+      if (_fireBedGain) _fireBedGain.gain.setTargetAtTime(0.01 + fireLevel * 0.08, _audioCtx.currentTime, 0.4);
+      if (_windGain) _windGain.gain.setTargetAtTime(0.005 + windLevel * 0.04, _audioCtx.currentTime, 0.8);
+    }
+
+    function toggleMute() {
+      _muted = !_muted;
+      document.getElementById("btn-mute").textContent = _muted ? "🔇" : "🔊";
+      if (_muted && _audioCtx) {
+        _audioCtx.suspend();
+      } else if (!_muted && _audioCtx && _audioCtx.state === "suspended") {
+        _audioCtx.resume();
+        if (!_crackleTimer) _scheduleCrackle();
+      }
+    }
+
+    // ── Drawing modes ─────────────────────────────────────────────────────────
+    function setMode(m) {
+      var prev = mode;
+      mode = m;
+
+      // Commit any in-progress containment line when switching away
+      if (prev === "containment" && m !== "containment" && containmentPoints.length >= 2) {
+        commitContainmentLine();
+      }
+      // Cancel incomplete lasso when switching away
+
+      // Update button active classes
+      ["btn-cursor", "btn-ignite", "btn-water", "btn-containment", "btn-mask"].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.className = "";
+      });
+      var activeClass = {
+        cursor:      "active-cursor",
+        ignite:      "active-ignite",
+        water:       "active-water",
+        containment: "active-containment",
+        mask:        "active-mask",
+      }[m] || "";
+      var btn = document.getElementById("btn-" + m);
+      if (btn && activeClass) btn.className = activeClass;
+
+      // Map cursor
+      var canvas = map.getCanvas();
+      canvas.classList.remove("map-cursor-cursor", "map-cursor-ignite",
+                              "map-cursor-water", "map-cursor-containment", "map-cursor-mask");
+      canvas.classList.add("map-cursor-" + m);
+
+      // Map interaction: only cursor mode allows dragging
+      if (m === "cursor") {
+        map.dragPan.enable();
+        map.boxZoom.enable();
+      } else {
+        map.dragPan.disable();
+        map.boxZoom.disable();
+      }
+
+      // Show/hide tool-specific controls
+      document.getElementById("brush-controls").style.display =
+        (m === "water") ? "block" : "none";
+      document.getElementById("containment-controls").style.display =
+        (m === "containment") ? "block" : "none";
+      var applyCtBtn = document.getElementById("btn-apply-containment");
+      if (applyCtBtn) applyCtBtn.style.display =
+        (m === "containment" && containmentPoints.length >= 2) ? "block" : "none";
+
+      // Brush cursor ring
+      if (_brushRing) _brushRing.style.display = (m === "water") ? "block" : "none";
+
+      // Mask controls
+      if (m === "mask" && !maskCommitted) {
+        setStatus("Click to add polygon vertices. Click 'Close Polygon' to finish.", "info");
+        document.getElementById("btn-close-mask").style.display = "block";
+        document.getElementById("btn-clear-mask").style.display =
+          maskPoints.length > 0 ? "block" : "none";
+      } else {
+        document.getElementById("btn-close-mask").style.display = "none";
+        document.getElementById("btn-clear-mask").style.display =
+          maskCommitted ? "block" : "none";
+      }
+
+      // Mode-specific status hint
+      if (m === "cursor")
+        setStatus("Cursor mode — drag to pan. Shift+drag to analyse area. Alt+click for cell info.", "info");
+      else if (m === "ignite")
+        setStatus("Ignite — click to add ignition point, or drag to draw ignition region.", "info");
+      else if (m === "water")
+        setStatus("Water — click or drag to paint water. Adjust brush in controls below.", "info");
+      else if (m === "containment")
+        setStatus("Containment — click to add waypoints, then click Deploy button.", "info");
+    }
+
+    function onMapClick(e) {
+      if (e.originalEvent && e.originalEvent.ctrlKey) return;
+      var lat = e.lngLat.lat, lng = e.lngLat.lng;
+      if (mode === "cursor") {
+        // Alt+click handled by raw mousedown listener — nothing else here
+        return;
+      } else if (mode === "ignite") {
+        ignitionPoints.push({ lat: lat, lng: lng });
+        refreshIgnList();
+        redrawIgnition();
+        setStatus("Ignition point added (" + ignitionPoints.length + " total).", "ok");
+      } else if (mode === "water") {
+        _applyWaterBrushAt(lat, lng);
+      } else if (mode === "containment") {
+        containmentPoints.push([lng, lat]);
+        redrawContainmentLines(true);
+        setStatus("Containment waypoint " + containmentPoints.length + " added.", "info");
+        var applyCtBtn = document.getElementById("btn-apply-containment");
+        if (applyCtBtn && containmentPoints.length >= 2) applyCtBtn.style.display = "block";
+      } else if (mode === "mask") {
+        if (maskCommitted) return; // polygon already closed
+        maskPoints.push([lng, lat]);
+        redrawMaskPreview();
+        document.getElementById("btn-clear-mask").style.display = "block";
+        setStatus("Mask vertex " + maskPoints.length + " added. Click 'Close Polygon' when done.", "info");
+      }
+    }
+
+    function refreshIgnList() {
+      var el = document.getElementById("ign-list");
+      document.getElementById("ign-count").textContent = ignitionPoints.length;
+      if (!ignitionPoints.length) {
+        el.textContent = "None yet — click the map in Ignite mode.";
+        return;
+      }
+      el.innerHTML = ignitionPoints.map(function (p, i) {
+        return "<div>" + (i + 1) + ". " + p.lat.toFixed(4) + ", " + p.lng.toFixed(4) + "</div>";
+      }).join("");
+    }
+
+    function redrawIgnition() {
+      var fc = {
+        type: "FeatureCollection",
+        features: ignitionPoints.map(function (p) {
+          return { type: "Feature", geometry: { type: "Point", coordinates: [p.lng, p.lat] }, properties: {} };
+        }),
+      };
+      if (map.getSource(SRC_IGNITE)) map.getSource(SRC_IGNITE).setData(fc);
+    }
+
+    // ── Containment line functions ────────────────────────────────────────────
+
+    function _getContainmentParams() {
+      return {
+        strength:          parseFloat(document.getElementById("ct-strength").value)  || 0.7,
+        effect_radius_m:   parseFloat(document.getElementById("ct-radius").value)    || 150,
+        water_application: parseFloat(document.getElementById("ct-water").value)     || 0.5,
+        humidity_boost:    parseFloat(document.getElementById("ct-humidity").value)  || 0.05,
+        decay_hours:       parseFloat(document.getElementById("ct-decay").value)     || 2.0,
+      };
+    }
+
+    function redrawContainmentLines(includePreview) {
+      var now = Date.now();
+      var lineFeatures = [];
+      var markerFeatures = [];
+
+      committedContainmentLines.forEach(function (line) {
+        var elapsed = now - line.createdAtMs;
+        var opacity = line.decayMs > 0
+          ? Math.max(0.08, 1.0 - elapsed / line.decayMs)
+          : 0.88;
+        if (opacity < 0.05) return;  // fully expired, skip
+
+        var color = opacity > 0.5 ? "#f9e2af" : "#585b70";
+        var width = 1.5 + opacity * 1.5;
+
+        lineFeatures.push({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: line.points },
+          properties: { opacity: opacity, color: color, width: width },
+        });
+
+        // Truck markers every ~5 waypoints along the line
+        var step = Math.max(1, Math.floor(line.points.length / 4));
+        for (var i = 0; i < line.points.length; i += step) {
+          markerFeatures.push({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: line.points[i] },
+            properties: { icon: "🚒", opacity: opacity },
+          });
+        }
+      });
+
+      if (includePreview && containmentPoints.length > 1) {
+        lineFeatures.push({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: containmentPoints.slice() },
+          properties: { opacity: 0.6, color: "#f9e2af", width: 2 },
+        });
+        // Waypoint dots for preview
+        containmentPoints.forEach(function (pt) {
+          markerFeatures.push({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: pt },
+            properties: { icon: "📍", opacity: 0.8 },
+          });
+        });
+      }
+
+      var lineFC    = { type: "FeatureCollection", features: lineFeatures };
+      var markerFC  = { type: "FeatureCollection", features: markerFeatures };
+      if (map.getSource(SRC_CONTAINMENT))         map.getSource(SRC_CONTAINMENT).setData(lineFC);
+      if (map.getSource(SRC_CONTAINMENT_MARKERS)) map.getSource(SRC_CONTAINMENT_MARKERS).setData(markerFC);
+    }
+
+    function applyContainmentLine() {
+      if (containmentPoints.length < 2) {
+        setStatus("Add at least 2 waypoints first.", "err");
+        return;
+      }
+      commitContainmentLine();
+    }
+
+    function commitContainmentLine() {
+      if (containmentPoints.length < 2) return;
+      var p = _getContainmentParams();
+      var decayMs = p.decay_hours > 0 ? p.decay_hours * 3600 * 1000 : 0;
+
+      committedContainmentLines.push({
+        points:      containmentPoints.slice(),
+        strength:    p.strength,
+        createdAtMs: Date.now(),
+        decayMs:     decayMs,
+        effectRadius:p.effect_radius_m,
+      });
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "intervention",
+          intervention_type: "containment_line",
+          points: containmentPoints.map(function (c) { return { lat: c[1], lon: c[0] }; }),
+          strength:          p.strength,
+          effect_radius_m:   p.effect_radius_m,
+          water_application: p.water_application,
+          humidity_boost:    p.humidity_boost,
+          decay_hours:       p.decay_hours,
+        }));
+      }
+
+      containmentPoints = [];
+      var applyCtBtn = document.getElementById("btn-apply-containment");
+      if (applyCtBtn) applyCtBtn.style.display = "none";
+      redrawContainmentLines(false);
+      setStatus("Containment line deployed — " + committedContainmentLines.length + " active.", "ok");
+    }
+
+    // Animate containment line decay (update opacity over real time)
+    function _updateContainmentDecay() {
+      var now = Date.now();
+      var anyActive = false;
+      committedContainmentLines = committedContainmentLines.filter(function (line) {
+        if (line.decayMs <= 0) return true;
+        return (now - line.createdAtMs) < line.decayMs * 1.05;  // keep a bit past expiry
+      });
+      if (committedContainmentLines.length > 0) {
+        redrawContainmentLines(false);
+      }
+    }
+    // Update decay visuals every 10 seconds
+    setInterval(_updateContainmentDecay, 10000);
+
+    function addWaterDrop(lat, lng, radiusM) {
+      var N = 36;
+      var latRad = lat * Math.PI / 180;
+      var dLat = (radiusM || 500) / 111320;
+      var dLon = dLat / Math.max(0.2, Math.cos(latRad));
+      var ring = [];
+      for (var i = 0; i <= N; i++) {
+        var a = (i / N) * 2 * Math.PI;
+        ring.push([lng + dLon * Math.cos(a), lat + dLat * Math.sin(a)]);
+      }
+      waterDrops.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: {} });
+      if (map.getSource(SRC_WATER)) {
+        map.getSource(SRC_WATER).setData({ type: "FeatureCollection", features: waterDrops });
+      }
+    }
+
+    // ── Water brush ───────────────────────────────────────────────────────────
+
+    function _getBrushParams() {
+      return {
+        radius_m:  parseFloat(document.getElementById("brush-radius").value)    || 200,
+        intensity: parseFloat(document.getElementById("brush-intensity").value) || 1.0,
+        falloff:   parseFloat(document.getElementById("brush-falloff").value)   || 0.8,
+        hardness:  parseFloat(document.getElementById("brush-hardness").value)  || 0.5,
+      };
+    }
+
+    function _onBrushRadiusChange(val) {
+      document.getElementById("brush-radius-val").textContent = val + " m";
+      _updateBrushRing();
+    }
+
+    function _applyWaterBrushAt(lat, lng) {
+      var p = _getBrushParams();
+      // Visual circle on map
+      _addWaterBrushCircle(lat, lng, p.radius_m);
+      // Send to server
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "intervention",
+          intervention_type: "water_brush",
+          lat: lat, lon: lng,
+          radius_m: p.radius_m,
+          intensity: p.intensity,
+          falloff: p.falloff,
+          hardness: p.hardness,
+        }));
+      }
+    }
+
+    function _addWaterBrushCircle(lat, lng, radiusM) {
+      var N = 32;
+      var latRad = lat * Math.PI / 180;
+      var dLat = radiusM / 111320;
+      var dLon = dLat / Math.max(0.1, Math.cos(latRad));
+      var ring = [];
+      for (var i = 0; i <= N; i++) {
+        var a = (i / N) * 2 * Math.PI;
+        ring.push([lng + dLon * Math.cos(a), lat + dLat * Math.sin(a)]);
+      }
+      waterDrops.push({
+        type: "Feature",
+        geometry: { type: "Polygon", coordinates: [ring] },
+        properties: { brush: true }
+      });
+      // Keep max 200 brush circles for performance
+      if (waterDrops.length > 200) waterDrops.splice(0, waterDrops.length - 200);
+      if (map.getSource(SRC_WATER)) {
+        map.getSource(SRC_WATER).setData({ type: "FeatureCollection", features: waterDrops });
+      }
+    }
+
+    // Brush cursor ring — follows mouse when in water mode
+    function _initBrushRing() {
+      _brushRing = document.getElementById("brush-cursor-ring");
+    }
+
+    function _updateBrushRing(clientX, clientY) {
+      if (!_brushRing || mode !== "water") return;
+      _brushRing.style.display = "block";
+      if (clientX === undefined) return;
+
+      var p = _getBrushParams();
+      var radiusM = p.radius_m;
+
+      // Compute pixel radius: project two points 1° lat apart, measure pixel distance
+      if (!_fireBbox) { _brushRing.style.opacity = "0"; return; }
+      var c1 = map.project([(_fireBbox.lon_min + _fireBbox.lon_max) / 2,
+                            (_fireBbox.lat_min + _fireBbox.lat_max) / 2]);
+      var c2 = map.project([(_fireBbox.lon_min + _fireBbox.lon_max) / 2,
+                            (_fireBbox.lat_min + _fireBbox.lat_max) / 2 + 1 / 111320]);
+      var pxPerM = Math.abs(c2.y - c1.y);
+      var radiusPx = Math.max(4, radiusM * pxPerM);
+
+      var mapRect = map.getContainer().getBoundingClientRect();
+      var x = clientX - mapRect.left;
+      var y = clientY - mapRect.top;
+
+      _brushRing.style.left   = x + "px";
+      _brushRing.style.top    = y + "px";
+      _brushRing.style.width  = (radiusPx * 2) + "px";
+      _brushRing.style.height = (radiusPx * 2) + "px";
+      _brushRing.style.opacity = "1";
+    }
+
+    // ── Suppression line ──────────────────────────────────────────────────────
+
+    // ── Rect area analysis ────────────────────────────────────────────────────
+
+    function _updateRectPreview() {
+      if (!_rectStart || !_rectEnd) return;
+      var lon_min = Math.min(_rectStart.lng, _rectEnd.lng);
+      var lon_max = Math.max(_rectStart.lng, _rectEnd.lng);
+      var lat_min = Math.min(_rectStart.lat, _rectEnd.lat);
+      var lat_max = Math.max(_rectStart.lat, _rectEnd.lat);
+      var ring = [
+        [lon_min, lat_min], [lon_max, lat_min],
+        [lon_max, lat_max], [lon_min, lat_max], [lon_min, lat_min]
+      ];
+      var src = map.getSource(SRC_RECT_SEL);
+      if (src) src.setData({
+        type: "FeatureCollection", features: [
+          { type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: {} },
+        ],
+      });
+    }
+
+    function _sendRectAnalysis() {
+      if (!_rectStart || !_rectEnd || !ws || ws.readyState !== WebSocket.OPEN) {
+        closeRectAnalysis();
+        return;
+      }
+      ws.send(JSON.stringify({
+        type:    "rect_analysis",
+        lat_min: Math.min(_rectStart.lat, _rectEnd.lat),
+        lat_max: Math.max(_rectStart.lat, _rectEnd.lat),
+        lon_min: Math.min(_rectStart.lng, _rectEnd.lng),
+        lon_max: Math.max(_rectStart.lng, _rectEnd.lng),
+      }));
+    }
+
+    function closeRectAnalysis() {
+      var panel = document.getElementById("rect-analysis");
+      if (panel) panel.classList.remove("visible");
+      if (map.getSource(SRC_RECT_SEL)) map.getSource(SRC_RECT_SEL).setData(emptyFC());
+      _rectSelecting = false; _rectStart = null; _rectEnd = null;
+    }
+
+    function _renderRectAnalysis(msg) {
+      var panel   = document.getElementById("rect-analysis");
+      var content = document.getElementById("rect-analysis-content");
+      if (!panel || !content) return;
+
+      if (msg.error) {
+        content.innerHTML = '<div class="ra-row" style="color:#f38ba8">' + msg.error + '</div>';
+        panel.classList.add("visible");
+        return;
+      }
+
+      var s  = msg.stats || {};
+      var mc = msg.microclimate;
+
+      var html = "";
+      html += '<div class="ra-row"><b>Total:</b> ' + (s.total_cells || 0) + ' cells</div>';
+      html += '<div class="ra-row"><b>Burned:</b> ' + (s.burned_cells || 0) + ' cells (<b>' + (s.burned_ha || 0).toFixed(2) + ' ha</b>)</div>';
+      html += '<div class="ra-row"><b>Active:</b> ' + (s.burning_cells || 0) + ' cells (<b>' + (s.burning_ha || 0).toFixed(2) + ' ha</b>)</div>';
+      html += '<hr class="ra-divider">';
+      html += '<div class="ra-row"><b>Fuel:</b> ' + (s.dominant_fuel || "—").replace(/_/g, " ") + '</div>';
+      html += '<div class="ra-row"><b>Avg elevation:</b> ' + (s.avg_elevation || 0).toFixed(0) + ' m</div>';
+      html += '<div class="ra-row"><b>Avg moisture:</b> ' + (((s.avg_moisture || 0)*100).toFixed(1)) + '%</div>';
+      html += '<div class="ra-row"><b>Wind:</b> ' + (s.wind_speed_ms || 0).toFixed(1) + ' m/s → ' +
+              ['N','NE','E','SE','S','SW','W','NW'][Math.round((s.wind_dir_deg||0)/45)%8] + '</div>';
+      html += '<div class="ra-row"><b>Dominant spread:</b> ' + (s.dominant_spread_dir || "—") + '</div>';
+      if ((s.avg_water || 0) > 0.01)
+        html += '<div class="ra-row"><b>Avg water:</b> ' + (s.avg_water || 0).toFixed(2) + ' units</div>';
+      if ((s.avg_containment || 0) > 0.01)
+        html += '<div class="ra-row"><b>Avg containment:</b> ' + (((s.avg_containment||0)*100).toFixed(0)) + '%</div>';
+
+      if (mc && mc.learned) {
+        html += '<hr class="ra-divider">';
+        html += '<div class="ra-mc"><b>🧠 Microclimate (' + mc.runs + ' runs):</b><br>';
+        html += 'Ignition freq: <b>' + ((mc.avg_ignition_freq||0)*100).toFixed(0) + '%</b> · ';
+        html += 'ROS factor: <b>×' + (mc.avg_ros_factor||1).toFixed(2) + '</b></div>';
+      }
+
+      content.innerHTML = html;
+      panel.classList.add("visible");
+    }
+
+    // ── Fire Info Window (draggable) ──────────────────────────────────────────
+
+    var _fiWinDragging   = false;
+    var _fiWinDragOffX   = 0;
+    var _fiWinDragOffY   = 0;
+
+    function closeFireInfoWindow() {
+      document.getElementById("fire-info-window").classList.remove("visible");
+    }
+    // backward-compat alias used elsewhere
+    function closeCellExplain() { closeFireInfoWindow(); }
+
+    (function _initFireInfoWindowDrag() {
+      var header = document.getElementById("fire-info-header");
+      var win    = document.getElementById("fire-info-window");
+      if (!header || !win) return;
+      header.addEventListener("mousedown", function(e) {
+        if (e.target.tagName === "BUTTON") return;
+        _fiWinDragging = true;
+        var r = win.getBoundingClientRect();
+        _fiWinDragOffX = e.clientX - r.left;
+        _fiWinDragOffY = e.clientY - r.top;
+        e.preventDefault();
+      });
+      document.addEventListener("mousemove", function(e) {
+        if (!_fiWinDragging) return;
+        var w2 = document.getElementById("fire-info-window");
+        if (!w2) return;
+        var nl = Math.max(0, Math.min(e.clientX - _fiWinDragOffX, window.innerWidth  - w2.offsetWidth));
+        var nt = Math.max(0, Math.min(e.clientY - _fiWinDragOffY, window.innerHeight - w2.offsetHeight));
+        w2.style.left  = nl + "px";
+        w2.style.top   = nt + "px";
+        w2.style.right = "auto";
+      });
+      document.addEventListener("mouseup", function() { _fiWinDragging = false; });
+    })();
+
+    function _windBearingLabel(deg) {
+      var dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+      return dirs[Math.round((deg + 360) / 45) % 8];
+    }
+
+    function _renderCellExplanation(msg) {
+      var win     = document.getElementById("fire-info-window");
+      var content = document.getElementById("fire-info-body");
+      if (!win || !content) return;
+
+      if (msg.error) {
+        content.innerHTML = '<div class="ce-row" style="color:#f38ba8">' + msg.error + '</div>';
+        win.classList.add("visible");
+        return;
+      }
+
+      var stateClass = {
+        unburned: "ce-state-unburned",
+        burning:  "ce-state-burning",
+        burned:   "ce-state-burned",
+      }[msg.state] || "";
+
+      var html = "";
+
+      // ── Identity ──────────────────────────────────────────────────────────
+      html += '<div class="fi-sect">Identity</div>';
+      html += '<div class="ce-row"><b>State:</b> <span class="' + stateClass + '">' +
+              (msg.state || "—").toUpperCase() + "</span></div>";
+      if (msg.row !== undefined)
+        html += '<div class="ce-row" style="color:#585b70;font-size:9.5px">Row ' +
+                msg.row + " · Col " + msg.col;
+      if (msg.lat !== undefined)
+        html += " · " + (+msg.lat).toFixed(4) + "°N " + (+msg.lon).toFixed(4) + "°E";
+      if (msg.row !== undefined) html += "</div>";
+
+      // ── Fuel ──────────────────────────────────────────────────────────────
+      if (msg.fuel) {
+        html += '<div class="fi-sect">Fuel</div>';
+        html += '<div class="ce-row"><b>Type:</b> ' +
+                (msg.fuel.name || "—").replace(/_/g, " ") + "</div>";
+        html += '<div class="ce-row"><b>Load:</b> ' +
+                (msg.fuel.load_lb_ft2 || 0).toFixed(3) + " lb/ft² &nbsp;|&nbsp; <b>Heat:</b> " +
+                (msg.fuel.heat_content || 0).toLocaleString() + " BTU/lb</div>";
+        html += '<div class="ce-row"><b>Moisture ext:</b> ' +
+                ((msg.fuel.moisture_ext || 0) * 100).toFixed(0) + "%</div>";
+      }
+
+      // ── Environment ───────────────────────────────────────────────────────
+      if (msg.environment) {
+        html += '<div class="fi-sect">Environment</div>';
+        var ev = msg.environment;
+        var bear = _windBearingLabel(ev.wind_direction_deg || 0);
+        html += '<div class="ce-row"><b>Wind:</b> ' + (ev.wind_speed_ms || 0).toFixed(1) +
+                " m/s → " + bear + "</div>";
+        html += '<div class="ce-row"><b>Slope:</b> ' +
+                (ev.slope_degrees || 0).toFixed(1) + "°  <b>Elev:</b> " +
+                (ev.elevation_m || 0).toFixed(0) + " m</div>";
+        var mfPct = ((ev.moisture_fraction || 0) * 100).toFixed(1);
+        var mrPct = Math.round((ev.moisture_ratio || 0) * 100);
+        html += '<div class="ce-row"><b>Fuel moisture:</b> ' + mfPct +
+                "% (" + mrPct + "% of extinction)</div>";
+      }
+
+      // ── Water / containment ───────────────────────────────────────────────
+      var ct = msg.containment || msg.suppression;
+      if (ct) {
+        html += '<div class="fi-sect">Suppression State</div>';
+        if ((ct.water_amount || 0) > 0.02)
+          html += '<div class="ce-row"><b>Water:</b> ' + (ct.water_amount || 0).toFixed(2) + " units</div>";
+        if ((ct.wetness || 0) > 0.05)
+          html += '<div class="ce-row"><b>Wetness:</b> ' +
+                  Math.round((ct.wetness || 0) * 100) + "%</div>";
+        if ((ct.containment_strength || ct.suppression_strength || 0) > 0.02)
+          html += '<div class="ce-row"><b>Containment:</b> ' +
+                  Math.round((ct.containment_strength || ct.suppression_strength || 0) * 100) + "%</div>";
+        if (ct.is_blocked)
+          html += '<div class="ce-row" style="color:#fab387"><b>Hard barrier</b></div>';
+      }
+
+      // ── Fire state ────────────────────────────────────────────────────────
+      if (msg.fire_state) {
+        var fs = msg.fire_state;
+        html += '<div class="fi-sect">Fire State</div>';
+        if (msg.state === "burning") {
+          var pct = fs.burn_timer_max > 0 ? Math.round(fs.burn_timer / fs.burn_timer_max * 100) : 0;
+          html += '<div class="ce-row"><b>Burn timer:</b> ' + pct + "% remaining</div>";
+          if (fs.ignition_step >= 0)
+            html += '<div class="ce-row"><b>Ignited at step:</b> ' + fs.ignition_step + "</div>";
+        } else if (msg.state === "unburned") {
+          html += '<div class="ce-row"><b>Heat progress:</b> ' +
+                  ((fs.ignition_progress != null ? fs.ignition_progress : fs.ignition_fraction) || 0).toFixed(3) +
+                  " / " + (fs.threshold || 1.0).toFixed(2) + " threshold</div>";
+        }
+      }
+
+      // ── Numerical ignition probability breakdown ──────────────────────────
+      var bd = msg.ignition_breakdown;
+      if (bd) {
+        html += '<div class="fi-sect">Spread Factor Decomposition</div>';
+        html += '<div class="fi-breakdown">';
+        function bdRow(label, val, note) {
+          var v = parseFloat(val) || 0;
+          var cls = v >= 0 ? "fi-bd-val pos" : "fi-bd-val neg";
+          var sign = v >= 0 ? "+" : "";
+          var n = note ? ' <span style="color:#45475a;font-size:9px">' + note + '</span>' : "";
+          return '<div class="fi-bd-row"><span>' + label + n + '</span>'
+               + '<span class="' + cls + '">' + sign + v.toFixed(3) + '</span></div>';
+        }
+        html += bdRow("Wind (φ_w)",         bd.wind_contribution,    "Rothermel");
+        html += bdRow("Slope (φ_s)",         bd.slope_contribution,   "terrain");
+        html += bdRow("Fuel base (R₀)",      bd.fuel_base,            "");
+        html += bdRow("Neighbor heat",       bd.neighbor_heat_active, "active");
+        html += bdRow("Moisture penalty η_m",bd.humidity_penalty,     "");
+        html += bdRow("Water/wetness",       bd.water_penalty,        "");
+        if ((bd.containment_penalty || 0) < -0.001)
+          html += bdRow("Containment",       bd.containment_penalty,  "damping");
+        html += '<div class="fi-bd-total">';
+        html += '<span>Max p_spread/step</span>';
+        html += '<span>' + ((bd.max_spread_rate_pstep || 0)).toFixed(4) + '</span>';
+        html += '</div>';
+        html += '<div class="fi-bd-total" style="color:#a6e3a1">';
+        html += '<span>Ignition progress</span>';
+        html += '<span>' + ((bd.ignition_progress || 0) * 100).toFixed(1) + '% of ' +
+                ((bd.threshold || 1.0) * 100).toFixed(0) + '%</span>';
+        html += '</div>';
+        html += '</div>';
+      }
+
+      // ── Ignition attribution ──────────────────────────────────────────────
+      if (msg.ignition_sources && msg.ignition_sources.length > 0 && msg.state !== "unburned") {
+        html += '<div class="fi-sect">Ignition Attribution</div>';
+        msg.ignition_sources.slice(0, 4).forEach(function (src) {
+          var pct = Math.round((src.fraction || 0) * 100);
+          var bar = Math.round(pct * 0.8);
+          html += '<div class="ce-row">'
+               + '<b>' + src.direction + '</b> — '
+               + pct + '% '
+               + '<span style="display:inline-block;height:6px;width:' + bar + 'px;background:#fab387;border-radius:2px;vertical-align:middle;margin-left:3px"></span>'
+               + '</div>';
+        });
+      }
+
+      // ── Dominant factors ─────────────────────────────────────────────────
+      if (msg.factors && msg.factors.length > 0) {
+        html += '<hr class="ce-divider">';
+        var fmap = {
+          "Wind": "wind", "Fuel": "fuel", "Water": "water", "Suppress": "supp",
+          "Contain": "supp", "Receiving": "spread", "Burning": "fuel",
+          "Cell fully": "fuel", "Primary ignition": "spread",
+        };
+        msg.factors.forEach(function (f) {
+          var cls = "ce-factor";
+          Object.keys(fmap).forEach(function (k) {
+            if (f.indexOf(k) === 0) cls += " " + fmap[k];
+          });
+          html += '<div class="' + cls + '">' + f + "</div>";
+        });
+      }
+
+      html += '<div class="ce-hint">Alt+click to re-analyse · drag header to move</div>';
+      content.innerHTML = html;
+      win.classList.add("visible");
+    }
+
+    // ── Ground-truth mask drawing ─────────────────────────────────────────────
+
+    function redrawMaskPreview() {
+      if (!map.getSource(SRC_MASK_PREV)) return;
+      var features = [];
+      if (maskPoints.length >= 2) {
+        features.push({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: maskPoints.slice() },
+          properties: {},
+        });
+      }
+      if (maskPoints.length > 0) {
+        // Dot markers for vertices
+        maskPoints.forEach(function (pt) {
+          features.push({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: pt },
+            properties: {},
+          });
+        });
+      }
+      map.getSource(SRC_MASK_PREV).setData({ type: "FeatureCollection", features: features });
+    }
+
+    function closeMaskPolygon() {
+      if (maskPoints.length < 3) {
+        setStatus("Need at least 3 points to close a polygon.", "err");
+        return;
+      }
+      maskCommitted = true;
+      // Close ring
+      var ring = maskPoints.slice();
+      ring.push(ring[0]);
+      var poly = {
+        type: "FeatureCollection",
+        features: [{
+          type: "Feature",
+          geometry: { type: "Polygon", coordinates: [ring] },
+          properties: {},
+        }],
+      };
+      if (map.getSource(SRC_MASK))     map.getSource(SRC_MASK).setData(poly);
+      // Clear the preview line
+      if (map.getSource(SRC_MASK_PREV))
+        map.getSource(SRC_MASK_PREV).setData({ type: "FeatureCollection", features: [] });
+
+      document.getElementById("btn-close-mask").style.display = "none";
+      document.getElementById("btn-clear-mask").style.display = "block";
+      document.getElementById("btn-run-opt").disabled = false;
+      document.getElementById("opt-elapsed-row").style.display = "flex";
+      setMode("ignite"); // switch back so user can place ignition points
+      setStatus("Mask closed (" + (ring.length - 1) + " vertices). Set fire age, place ignition points, then Run Optimizer.", "ok");
+    }
+
+    function clearMask() {
+      maskPoints    = [];
+      maskCommitted = false;
+      if (map.getSource(SRC_MASK))
+        map.getSource(SRC_MASK).setData({ type: "FeatureCollection", features: [] });
+      if (map.getSource(SRC_MASK_PREV))
+        map.getSource(SRC_MASK_PREV).setData({ type: "FeatureCollection", features: [] });
+      document.getElementById("btn-close-mask").style.display = "none";
+      document.getElementById("btn-clear-mask").style.display = "none";
+      document.getElementById("btn-run-opt").disabled = true;
+      document.getElementById("opt-elapsed-row").style.display = "none";
+      document.getElementById("opt-result-box").style.display = "none";
+      _clearEnsemble();
+      setStatus("Mask cleared.", "info");
+    }
+
+    function _clearEnsemble() {
+      if (_ensembleVisible && map.getLayer("ensemble-layer")) {
+        map.setLayoutProperty("ensemble-layer", "visibility", "none");
+      }
+      _ensembleVisible = false;
+    }
+
+    // ── Optimizer control ─────────────────────────────────────────────────────
+    // The optimizer runs on its own separate WebSocket connection
+    // (type "init_optimizer") so it NEVER interferes with the live simulation.
+
+    function runOptimizer() {
+      if (!maskCommitted) {
+        setStatus("Draw and close a ground-truth mask first.", "err");
+        return;
+      }
+      if (!ignitionPoints.length) {
+        setStatus("Place at least one ignition point first.", "err");
+        return;
+      }
+      if (_optimizerRunning) return;
+
+      // Study-area parameters (same calculation as runSimulation)
+      var lat_c = ignitionPoints.reduce(function(s,p){return s+p.lat;},0)/ignitionPoints.length;
+      var lon_c = ignitionPoints.reduce(function(s,p){return s+p.lng;},0)/ignitionPoints.length;
+      var half  = parseFloat(document.getElementById("bbox").value) || 0.125;
+
+      // Fire age at ground-truth mask
+      var elH   = parseInt(document.getElementById("opt-elapsed-h").value, 10) || 0;
+      var elM   = parseInt(document.getElementById("opt-elapsed-m").value, 10) || 0;
+      var elapsedHours = elH + elM / 60.0;
+      if (elapsedHours <= 0) elapsedHours = 6.0;
+
+      // Truth mask GeoJSON
+      var ring = maskPoints.slice(); ring.push(ring[0]);
+      var truthGeoJSON = {
+        type: "FeatureCollection",
+        features: [{ type: "Feature",
+                     geometry: { type: "Polygon", coordinates: [ring] },
+                     properties: {} }],
+      };
+
+      var nP = Math.max(4,  Math.min(100, parseInt(document.getElementById("opt-particles").value,  10) || 20));
+      var nI = Math.max(3,  Math.min(50,  parseInt(document.getElementById("opt-iterations").value, 10) || 12));
+
+      // Message to initialise an optimizer-only server session
+      var initOptMsg = {
+        type:              "init_optimizer",
+        lat_center:        lat_c,
+        lon_center:        lon_c,
+        bbox_degrees:      half,
+        ignition_points:   ignitionPoints.map(function(p){ return { lat:p.lat, lon:p.lng }; }),
+        wind_speed_ms:     parseFloat(document.getElementById("wind-speed").value)  || 5,
+        wind_dir_deg:      parseFloat(document.getElementById("wind-dir").value)    || 330,
+        temperature_c:     parseFloat(document.getElementById("temperature").value) || 35,
+        relative_humidity: parseFloat(document.getElementById("humidity").value)    || 25,
+      };
+
+      // Message to kick off the PSO run
+      var runOptMsg = {
+        type:               "run_optimizer",
+        truth_mask_geojson: truthGeoJSON,
+        elapsed_hours:      elapsedHours,
+        n_particles:        nP,
+        n_iterations:       nI,
+      };
+
+      _optimizerRunning = true;
+      document.getElementById("btn-run-opt").disabled = true;
+      _showOptModal(true, nP * nI);
+      setStatus("Connecting optimizer (separate session)…", "info");
+
+      // Close any stale optimizer connection
+      if (wsOpt) { wsOpt.close(); wsOpt = null; }
+
+      wsOpt = new WebSocket(WS_URL);
+      wsOpt.onopen = function() {
+        wsOpt.send(JSON.stringify(initOptMsg));
+      };
+      wsOpt.onmessage = function(ev) {
+        var msg;
+        try { msg = JSON.parse(ev.data); } catch(e) { return; }
+        if (msg.type === "init_optimizer_ack") {
+          // Server session is ready — fire the PSO command
+          wsOpt.send(JSON.stringify(runOptMsg));
+          setStatus("Optimizer running: " + nP + " particles × " + nI +
+                    " iters, fire age " + elH + "h " + elM + "m…", "info");
+        } else {
+          _handleOptMsg(msg);
+        }
+      };
+      wsOpt.onerror = function() {
+        setStatus("Optimizer connection error — is server.py running?", "err");
+        _dbg("wsOpt error", "#f38ba8");
+        _optimizerRunning = false;
+        document.getElementById("btn-run-opt").disabled = false;
+        _showOptModal(false, 0);
+      };
+      wsOpt.onclose = function() {
+        // Only reset if optimizer didn't finish normally
+        if (_optimizerRunning) {
+          _optimizerRunning = false;
+          document.getElementById("btn-run-opt").disabled = false;
+          _showOptModal(false, 0);
+          setStatus("Optimizer connection closed unexpectedly.", "err");
+        }
+        wsOpt = null;
+      };
+    }
+
+    function _handleOptMsg(msg) {
+      if (msg.type === "optimizer_progress") {
+        _updateOptProgress(msg);
+      } else if (msg.type === "optimizer_result") {
+        _showOptResult(msg);
+        // Close the optimizer WebSocket now that we have the result
+        if (wsOpt) { wsOpt.close(); wsOpt = null; }
+      } else if (msg.type === "optimizer_status") {
+        setStatus(msg.message, "info");
+        _dbg("Opt: " + msg.message, "#cba6f7");
+      } else if (msg.type === "error") {
+        setStatus("Optimizer error: " + msg.message, "err");
+        _dbg("Opt error: " + msg.message, "#f38ba8");
+        _optimizerRunning = false;
+        document.getElementById("btn-run-opt").disabled = false;
+        _showOptModal(false, 0);
+      }
+    }
+
+    function _showOptModal(show, totalEvals) {
+      var modal = document.getElementById("opt-modal");
+      if (show) {
+        // Read fire age from the inputs
+        var elH = parseInt(document.getElementById("opt-elapsed-h").value, 10) || 0;
+        var elM = parseInt(document.getElementById("opt-elapsed-m").value, 10) || 0;
+        modal.classList.add("visible");
+        document.getElementById("opt-progress-fill").style.width = "0%";
+        document.getElementById("opt-modal-age").textContent  = elH + "h " + elM + "m";
+        document.getElementById("opt-iter-val").textContent   = "—";
+        document.getElementById("opt-done-val").textContent   = "0 / " + (totalEvals || "?");
+        document.getElementById("opt-eta-val").textContent    = "calculating…";
+        document.getElementById("opt-modal-iou").textContent  = "IoU —";
+      } else {
+        modal.classList.remove("visible");
+      }
+    }
+
+    function _updateOptProgress(msg) {
+      var pct = msg.n_total > 0 ? Math.round(msg.n_done / msg.n_total * 100) : 0;
+      document.getElementById("opt-progress-fill").style.width = pct + "%";
+      // Estimate n_iterations from n_total / n_particles (particles = n_done/iteration)
+      var nIter = msg.n_total > 0 && msg.iteration > 0
+                  ? Math.round(msg.n_total / (msg.n_done / msg.iteration))
+                  : "?";
+      document.getElementById("opt-iter-val").textContent = msg.iteration + " / " + nIter;
+      document.getElementById("opt-done-val").textContent = msg.n_done + " / " + msg.n_total;
+      var iou = (msg.best_iou > 0) ? (msg.best_iou * 100).toFixed(1) + "%" : "—";
+      document.getElementById("opt-modal-iou").textContent = "Best IoU " + iou;
+      var eta = msg.eta_s;
+      document.getElementById("opt-eta-val").textContent =
+        eta > 60 ? Math.floor(eta / 60) + "m " + (eta % 60) + "s"
+                 : eta > 0 ? eta + "s" : "almost done…";
+    }
+
+    // ── Optimizer continue-simulation state ───────────────────────────────────
+    var _lastOptResult = null;
+    var _ocMode        = "ground_truth";
+
+    function setOcMode(m) {
+      _ocMode = m;
+      var btnGt = document.getElementById("oc-btn-gt");
+      var btnBs = document.getElementById("oc-btn-bs");
+      var dGt   = document.getElementById("oc-gt-desc");
+      var dBs   = document.getElementById("oc-bs-desc");
+      if (btnGt) btnGt.classList.toggle("active", m === "ground_truth");
+      if (btnBs) btnBs.classList.toggle("active", m === "best_params_sim");
+      if (dGt)   dGt.style.display  = m === "ground_truth"   ? "block" : "none";
+      if (dBs)   dBs.style.display  = m === "best_params_sim" ? "block" : "none";
+      _validateOcPanel();
+    }
+
+    function _validateOcPanel() {
+      var miss = document.getElementById("oc-gt-missing");
+      var btn  = document.getElementById("oc-btn-start");
+      if (_ocMode === "ground_truth" && !maskCommitted) {
+        if (miss) miss.style.display = "block";
+        if (btn)  btn.disabled = true;
+      } else {
+        if (miss) miss.style.display = "none";
+        if (btn)  btn.disabled = false;
+      }
+    }
+
+    function startOptimizerContinueSim() {
+      if (!_lastOptResult) {
+        setStatus("Run the optimizer first.", "err");
+        return;
+      }
+      if (_ocMode === "ground_truth" && !maskCommitted) {
+        setStatus("Draw and close a ground-truth mask first.", "err");
+        return;
+      }
+      if (!ignitionPoints.length) {
+        setStatus("Place at least one ignition point first.", "err");
+        return;
+      }
+
+      var useParams = document.getElementById("oc-use-params").checked;
+      var useMc     = document.getElementById("oc-use-mc").checked;
+      var lat_c = ignitionPoints.reduce(function(s,p){return s+p.lat;},0) / ignitionPoints.length;
+      var lon_c = ignitionPoints.reduce(function(s,p){return s+p.lng;},0) / ignitionPoints.length;
+      var half  = parseFloat(document.getElementById("bbox").value) || 0.125;
+      var elH   = parseInt(document.getElementById("opt-elapsed-h").value, 10) || 0;
+      var elM   = parseInt(document.getElementById("opt-elapsed-m").value, 10) || 0;
+      var elapsedH = elH + elM / 60.0;
+      if (elapsedH <= 0) elapsedH = 6.0;
+
+      // Build truth mask GeoJSON if committed
+      var ring = maskPoints.slice(); ring.push(ring[0]);
+      var truthGeoJSON = maskCommitted ? {
+        type: "FeatureCollection",
+        features: [{ type: "Feature",
+                     geometry: { type: "Polygon", coordinates: [ring] },
+                     properties: {} }]
+      } : null;
+
+      var initMsg = {
+        type:               "init",
+        lat_center:         lat_c,
+        lon_center:         lon_c,
+        bbox_degrees:       half,
+        ignition_points:    ignitionPoints.map(function(p){ return {lat:p.lat, lon:p.lng}; }),
+        wind_speed_ms:      parseFloat(document.getElementById("wind-speed").value)  || 5,
+        wind_dir_deg:       parseFloat(document.getElementById("wind-dir").value)    || 330,
+        temperature_c:      parseFloat(document.getElementById("temperature").value) || 35,
+        relative_humidity:  parseFloat(document.getElementById("humidity").value)    || 25,
+        ignition_time_utc:  document.getElementById("ignition-time").value || "14:00",
+        optimizer_mode:     _ocMode,
+        elapsed_hours:      elapsedH,
+        truth_mask_geojson: truthGeoJSON,
+        best_params:        useParams ? _lastOptResult.best_params : null,
+        use_opt_params:     useParams,
+      };
+
+      // Preserve ignition + mask across the ws restart
+      var savedIgnPts        = ignitionPoints.map(function(p){ return {lat:p.lat, lng:p.lng}; });
+      var savedMaskPts       = maskPoints.slice();
+      var savedMaskCommitted = maskCommitted;
+
+      if (ws) { try { ws.close(); } catch(e){} ws = null; }
+
+      // Partial reset — keep ignition/mask
+      simRunning        = true;
+      window._simHistory= null;
+      _fireOverlayReady = false;
+      _fireBbox         = null;
+      _simRows          = 0;
+      _simCols          = 0;
+      waterDrops.length = 0;
+      containmentPoints = [];
+      committedContainmentLines.length = 0;
+
+      ["glow-canvas","smoke-canvas","wind-canvas"].forEach(function(id) {
+        var c = document.getElementById(id);
+        if (c) { var ctx = c.getContext("2d"); ctx.clearRect(0,0,c.width,c.height); }
+      });
+
+      // Restore
+      ignitionPoints.length = 0;
+      savedIgnPts.forEach(function(p){ ignitionPoints.push(p); });
+      maskPoints.length = 0;
+      savedMaskPts.forEach(function(p){ maskPoints.push(p); });
+      maskCommitted = savedMaskCommitted;
+
+      document.getElementById("btn-run").style.display    = "none";
+      document.getElementById("btn-pause").style.display  = "block";
+      document.getElementById("btn-resume").style.display = "none";
+
+      var modeLabel = _ocMode === "ground_truth"
+        ? "Starting from ground-truth perimeter…"
+        : "Fast-forwarding " + elH + "h " + elM + "m with optimizer params…";
+      setStatus(modeLabel, "info");
+
+      // Connection with retry (same pattern as runSimulation)
+      var _attempt = 0;
+      function _oc_connect() {
+        _attempt++;
+        setStatus("Connecting (" + _attempt + "/6)…", "info");
+        if (ws) { try { ws.close(); } catch(e){} ws = null; }
+        ws = new WebSocket(WS_URL);
+        ws.onopen = function() {
+          setStatus("Connected — initializing…", "info");
+          ws.send(JSON.stringify(initMsg));
+          if (!_smokeRAF) _animateSmoke();
+        };
+        ws.onmessage = function(ev) {
+          var m2; try { m2 = JSON.parse(ev.data); } catch(e){ return; }
+          try { _handleMsg(m2); } catch(e){ console.error(e); }
+        };
+        ws.onerror = function() {
+          if (_attempt < 6 && simRunning) {
+            setTimeout(_oc_connect, 1000 + _attempt * 400);
+          } else {
+            setStatus("Cannot reach server.", "err");
+            _resetButtons(); simRunning = false;
+          }
+        };
+        ws.onclose = function() {
+          if (!simRunning) return;
+          setStatus("Simulation finished.", "ok");
+          simRunning = false; _resetButtons(); _updateAudio(0);
+        };
+      }
+      _oc_connect();
+    }
+
+    function _showOptResult(msg) {
+      _optimizerRunning = false;  // set before wsOpt.close() so onclose doesn't error-reset
+      document.getElementById("btn-run-opt").disabled = false;
+      _showOptModal(false, 0);
+
+      // Show best params
+      var p = msg.best_params || {};
+      var elH = parseInt(document.getElementById("opt-elapsed-h").value, 10) || 0;
+      var elM = parseInt(document.getElementById("opt-elapsed-m").value, 10) || 0;
+      var mcLine = msg.microclimate_used
+        ? "<span style='color:#cba6f7'>🧠 Microclimate: " + msg.microclimate_runs + " runs applied</span><br>"
+        : "<span style='color:#45475a'>🧠 No microclimate data (run a simulation first)</span><br>";
+      var html = "<b>Best IoU: " + (msg.best_iou * 100).toFixed(1) + "%</b>"
+        + " · Matched at " + elH + "h " + elM + "m<br>"
+        + mcLine
+        + "<span style='color:#f9e2af'>Heatmap = +1 h forecast beyond mask</span><br>"
+        + "Wind ×" + (p.wind_multiplier || 1).toFixed(2)
+        + " · Dir " + ((p.wind_direction_offset || 0) >= 0 ? "+" : "") + (p.wind_direction_offset || 0).toFixed(1) + "°"
+        + " · Moisture " + ((p.moisture_offset || 0) * 100).toFixed(1) + "%<br>"
+        + "Canopy WAF ×" + (p.canopy_wind_factor || 1).toFixed(2)
+        + " · Slope ×" + (p.slope_factor_mult || 1).toFixed(2) + "<br>"
+        + "Pine ×" + (p.ros_mult_pine   || 1).toFixed(2)
+        + " · Shrub ×" + (p.ros_mult_shrub  || 1).toFixed(2)
+        + " · Grass ×" + (p.ros_mult_grass  || 1).toFixed(2) + "<br>"
+        + "Forest ×" + (p.ros_mult_forest || 1).toFixed(2)
+        + " · Orchard ×" + (p.ros_mult_orchard || 1).toFixed(2) + "<br>"
+        + "Spotting ×" + (p.spotting_rate_mult || 1).toFixed(2)
+        + " · Ign.thresh " + (p.ignition_threshold || 1).toFixed(2);
+      var box = document.getElementById("opt-result-box");
+      box.innerHTML = html;
+      box.style.display = "block";
+
+      // Render ensemble heatmap as a MapLibre image layer
+      if (msg.heatmap_png_b64 && msg.lat_min !== undefined) {
+        var coords = [
+          [msg.lon_min, msg.lat_max],
+          [msg.lon_max, msg.lat_max],
+          [msg.lon_max, msg.lat_min],
+          [msg.lon_min, msg.lat_min],
+        ];
+        var imgUrl = "data:image/png;base64," + msg.heatmap_png_b64;
+        if (map.getSource(SRC_ENSEMBLE)) {
+          map.getSource(SRC_ENSEMBLE).updateImage({ url: imgUrl, coordinates: coords });
+          map.setLayoutProperty("ensemble-layer", "visibility", "visible");
+        } else {
+          map.addSource(SRC_ENSEMBLE, { type: "image", url: imgUrl, coordinates: coords });
+          map.addLayer({
+            id:    "ensemble-layer",
+            type:  "raster",
+            source: SRC_ENSEMBLE,
+            paint:  { "raster-opacity": 0.72 },
+          });
+        }
+        _ensembleVisible = true;
+        setStatus("Optimizer done — ensemble heatmap shown. Best IoU " +
+                  (msg.best_iou * 100).toFixed(1) + "%.", "ok");
+      }
+
+      // ── Show Continue Simulation panel ──────────────────────────────────────
+      _lastOptResult = msg;
+      var cp = document.getElementById("opt-continue");
+      if (cp) {
+        cp.style.display = "block";
+
+        // IoU quality warning
+        var warn = document.getElementById("oc-iou-warn");
+        if (warn) {
+          var iou = msg.best_iou || 0;
+          if (iou < 0.25) {
+            warn.style.display = "block";
+            warn.innerHTML = "⚠ IoU = " + (iou * 100).toFixed(0) + "% — very poor match. "
+              + "The optimizer did not converge. Parameters are unreliable.";
+          } else if (iou < 0.40) {
+            warn.style.display = "block";
+            warn.innerHTML = "⚠ IoU = " + (iou * 100).toFixed(0) + "% — below 40%. "
+              + "Results may not reflect real fire behaviour. Use with caution.";
+          } else {
+            warn.style.display = "none";
+          }
+        }
+
+        // Update best-sim mode description with fire age
+        var elH = parseInt(document.getElementById("opt-elapsed-h").value, 10) || 0;
+        var elM = parseInt(document.getElementById("opt-elapsed-m").value, 10) || 0;
+        var bsDesc = document.getElementById("oc-bs-desc");
+        if (bsDesc) bsDesc.textContent =
+          "Runs with optimizer parameters for " + elH + "h " + elM + "m, then continues.";
+
+        // Initial validation
+        setOcMode(_ocMode);
+      }
+    }
+
+    // ── Microclimate memory panel ─────────────────────────────────────────────
+
+    function _updateMcPanel(stats, runs) {
+      var panel = document.getElementById("mc-panel");
+      if (!panel) return;
+      panel.style.display = "block";
+
+      document.getElementById("mc-runs-val").textContent = runs || 0;
+
+      var noData  = document.getElementById("mc-no-data");
+      var statBlk = document.getElementById("mc-stats-block");
+      var badge   = document.getElementById("mc-opt-badge");
+
+      if (runs >= 1 && stats) {
+        if (noData)  noData.style.display  = "none";
+        if (statBlk) {
+          statBlk.style.display = "block";
+          var ignEl  = document.getElementById("mc-ign-val");
+          var rosEl  = document.getElementById("mc-ros-val");
+          var windEl = document.getElementById("mc-wind-val");
+          if (ignEl)  ignEl.textContent  = ((stats.avg_ignition_freq  || 0) * 100).toFixed(0) + "%";
+          if (rosEl)  rosEl.textContent  = (stats.avg_ros_factor      || 1).toFixed(2);
+          if (windEl) windEl.textContent = (stats.avg_wind_factor     || 1).toFixed(2);
+        }
+      } else {
+        if (noData)  noData.style.display  = "block";
+        if (statBlk) statBlk.style.display = "none";
+      }
+
+      // Badge: show "will be used" only if ≥ 2 runs (MicroclimateLearner requirement)
+      if (badge) badge.style.display = (runs >= 2) ? "block" : "none";
+    }
+
+    // ── Speed control ─────────────────────────────────────────────────────────
+    function onSpeedChange(val) {
+      var n = parseInt(val, 10);
+      document.getElementById("speed-val").textContent = n + "×";
+      var steps = Math.round(1 + (n - 1) * (50 - 1) / 9);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "set_speed", steps_per_send: steps }));
+      }
+    }
+
+    // ── WebSocket message handler ─────────────────────────────────────────────
+    function _handleMsg(msg) {
+      if (msg.type === "init_ack") {
+        _dtMinutes = msg.dt_minutes || 0.05;
+        _cellM     = msg.cell_m    || 50;
+        _simRows   = msg.rows  || 0;
+        _simCols   = msg.cols  || 0;
+        setStatus(msg.message || "Simulation started.", "ok");
+        _dbg("init_ack: " + msg.cols + "x" + msg.rows + " grid, cell=" + (msg.cell_m || 0).toFixed(0) + "m", "#89b4fa");
+        clearEvents();
+        if (msg.osm_overlay_stats) {
+          var s = msg.osm_overlay_stats;
+          _dbg("OSM overlay active: roads=" + (s.road_cells || 0) + " cells, urban=" + (s.urban_cells || 0) + " cells", "#a6e3a1");
+        }
+        _initFireOverlay(msg.rows, msg.cols,
+                         msg.lat_min, msg.lat_max, msg.lon_min, msg.lon_max);
+        if (msg.geojson_fuel_map) _initVegMap(msg.geojson_fuel_map);
+        // Show microclimate panel if server already has prior run data
+        if (msg.microclimate && msg.microclimate.runs > 0) {
+          _updateMcPanel(msg.microclimate, msg.microclimate.runs);
+        }
+        map.fitBounds(
+          [[msg.lon_min, msg.lat_min], [msg.lon_max, msg.lat_max]],
+          { padding: 40, duration: 800 }
+        );
+        if (msg.wind_u_grid && msg.wind_v_grid) {
+          _initWindStreamlines(msg.wind_u_grid, msg.wind_v_grid,
+                               msg.wind_grid_rows, msg.wind_grid_cols,
+                               msg.lat_min, msg.lat_max, msg.lon_min, msg.lon_max);
+        }
+        if (msg.hourly_weather && msg.hourly_weather.length > 0) {
+          var hw = msg.hourly_weather[0];
+          _showWeatherStrip({
+            wind_speed_ms: hw.wind_speed_ms, wind_direction: hw.wind_direction,
+            temperature_c: hw.temperature_c, relative_humidity: hw.relative_humidity,
+          });
+        }
+
+      } else if (msg.type === "weather_update") {
+        _showWeatherStrip(msg);
+
+      } else if (msg.type === "status") {
+        setStatus(msg.message, "info");
+        _dbg("Status: " + msg.message, "#a6adc8");
+        if (msg.message && msg.message.startsWith("Scrubbing")) {
+          document.getElementById("btn-pause").style.display  = "none";
+          document.getElementById("btn-resume").style.display = "block";
+        }
+
+      } else if (msg.type === "fire_event") {
+        _addEvent(msg.event_type || 'info', msg.icon || 'ℹ️', msg.message || '');
+
+      } else if (msg.type === "error") {
+        setStatus("Error: " + msg.message, "err");
+        _dbg("Error: " + msg.message, "#f38ba8");
+
+      } else if (msg.type === "frame") {
+        renderFireFrame(msg);
+          // Coalesce incoming frames and process at display refresh rate to avoid
+          // blocking on frequent heavy updates (map.setData, canvas draws).
+          window._pendingFrame = msg;
+          if (!window._frameTickScheduled) {
+            window._frameTickScheduled = true;
+            requestAnimationFrame(function () {
+              window._frameTickScheduled = false;
+              var fmsg = window._pendingFrame;
+              window._pendingFrame = null;
+              if (!fmsg) return;
+
+              // Update map layers (geojson) once per RAF
+              renderFireFrame(fmsg);
+
+              // Canvas overlays: glow + smoke (smoke spawn throttled)
+              _renderGlow(fmsg.geojson_burning);
+              var nowMs = Date.now();
+              if (!window._lastSmokeSpawn || nowMs - window._lastSmokeSpawn > 250) {
+                _spawnSmoke(fmsg.geojson_burning);
+                window._lastSmokeSpawn = nowMs;
+              }
+
+              // 3D overlay (already throttled by INTERVAL)
+              if (_sim3d.active) {
+                var _t3d = Date.now();
+                if (_t3d - _sim3d.lastUpdate > _sim3d.INTERVAL) {
+                  _sim3d.lastUpdate = _t3d;
+                  _update3DFireOverlay(fmsg.geojson_burning, fmsg.geojson_burned);
+                }
+              }
+
+              var elapsed = fmsg.minutes_since_ignition;
+              var wall    = fmsg.wall_clock_minutes;
+              updateStats(fmsg.step, fmsg.active_ha, fmsg.burned_ha, elapsed, wall);
+              _applyAtmoOverlay(elapsed || 0);
+              _showWeatherStrip({ simMinutes: elapsed, wall_clock_minutes: wall });
+              _updateRiskPanel(fmsg.step, fmsg.active_ha, fmsg.burned_ha, elapsed,
+                               { N: fmsg.ros_N || 0, E: fmsg.ros_E || 0,
+                                 S: fmsg.ros_S || 0, W: fmsg.ros_W || 0 });
+              _updateAudio(fmsg.active_ha);
+
+              var sc = document.getElementById("scrubber");
+              if (sc && simRunning) {
+                if (+sc.max < fmsg.step) sc.max = fmsg.step;
+                sc.value = fmsg.step;
+              }
+              if (fmsg.step % 100 === 0) {
+                _dbg("Step " + fmsg.step + ": active=" + (fmsg.active_ha || 0).toFixed(1) +
+                     "ha burned=" + (fmsg.burned_ha || 0).toFixed(1) + "ha", "#f9e2af");
+              }
+            });
+          }
+
+      } else if (msg.type === "history_ready") {
+        _setupScrubber(msg);
+
+      } else if (msg.type === "scrub_frame") {
+        _updateScrubFrame(msg);
+
+      } else if (msg.type === "cell_explanation") {
+        _renderCellExplanation(msg);
+
+      } else if (msg.type === "rect_analysis_result") {
+        _renderRectAnalysis(msg);
+
+      } else if (msg.type === "microclimate_update") {
+        _microclimateSummary = msg.stats;
+        _dbg("Microclimate updated (run #" + msg.runs + ")", "#cba6f7");
+        _addEvent("info", "🧠", msg.message || "Microclimate updated.");
+        _updateMcPanel(msg.stats, msg.runs);
+      }
+    }
+
+    // ── Simulation control ────────────────────────────────────────────────────
+    function runSimulation() {
+      if (!ignitionPoints.length) {
+        setStatus("Add at least one ignition point first.", "err");
+        return;
+      }
+      _initAudio();
+      if (_audioCtx && _audioCtx.state === "suspended") _audioCtx.resume();
+      if (ws) { ws.close(); ws = null; }
+
+      var lat_c   = ignitionPoints.reduce(function (s, p) { return s + p.lat; }, 0) / ignitionPoints.length;
+      var lon_c   = ignitionPoints.reduce(function (s, p) { return s + p.lng; }, 0) / ignitionPoints.length;
+      var half    = parseFloat(document.getElementById("bbox").value) || 0.25;
+      var dateVal = document.getElementById("date-start").value;
+      var ignTime = document.getElementById("ignition-time").value || "14:00";
+
+      var parts = ignTime.split(":");
+      var ignH  = parseInt(parts[0], 10) || 14;
+      var ignM  = parseInt(parts[1], 10) || 0;
+      _initTime         = dateVal ? new Date(dateVal + "T" + ignTime + ":00Z") : null;
+      _ignitionWallHour = ignH + ignM / 60;
+      window._simHistory = null;
+      simRunning = true;
+
+      var approxBbox = {
+        lon_min: lon_c - half, lon_max: lon_c + half,
+        lat_min: lat_c - half, lat_max: lat_c + half,
+      };
+      var initMsg = {
+        type:              "init",
+        lat_center:        lat_c,
+        lon_center:        lon_c,
+        bbox_degrees:      half,
+        ignition_points:   ignitionPoints.map(function (p) { return { lat: p.lat, lon: p.lng }; }),
+        wind_speed_ms:     parseFloat(document.getElementById("wind-speed").value)  || 5,
+        wind_dir_deg:      parseFloat(document.getElementById("wind-dir").value)    || 330,
+        temperature_c:     parseFloat(document.getElementById("temperature").value) || 35,
+        relative_humidity: parseFloat(document.getElementById("humidity").value)    || 25,
+        ignition_time_utc: ignTime,
+      };
+      if (dateVal) { initMsg.date_start = dateVal; initMsg.date_end = dateVal; }
+
+      document.getElementById("btn-run").style.display    = "none";
+      document.getElementById("btn-pause").style.display  = "block";
+      document.getElementById("btn-resume").style.display = "none";
+
+      // ── WebSocket with automatic retry (server may still be initialising) ──
+      var _wsAttempt = 0;
+      var _wsMaxAttempts = 6;
+
+      function _connect() {
+        _wsAttempt++;
+        setStatus("Connecting to simulation server (attempt " + _wsAttempt + "/" + _wsMaxAttempts + ")…", "info");
+
+        if (ws) { try { ws.close(); } catch(e){} ws = null; }
+        ws = new WebSocket(WS_URL);
+
+        ws.onopen = function () {
+          _wsAttempt = 0;
+          setStatus("Connected — building landscape…", "info");
+          ws.send(JSON.stringify(initMsg));
+          map.fitBounds(
+            [[approxBbox.lon_min, approxBbox.lat_min],
+             [approxBbox.lon_max, approxBbox.lat_max]],
+            { padding: 40, duration: 1000 }
+          );
+          if (!_smokeRAF) _animateSmoke();
+        };
+
+        ws.onmessage = function (ev) {
+          var msg;
+          try { msg = JSON.parse(ev.data); } catch (e) { return; }
+          try { _handleMsg(msg); } catch (e) {
+            console.error("_handleMsg error:", e);
+          }
+        };
+
+        ws.onerror = function () {
+          if (_wsAttempt < _wsMaxAttempts && simRunning) {
+            var delay = Math.min(1000 + _wsAttempt * 400, 3000);
+            setStatus("Server not ready — retrying in " + (delay/1000).toFixed(1) + "s…", "info");
+            setTimeout(_connect, delay);
+          } else {
+            setStatus("Cannot reach simulation server. Make sure python main.py is running.", "err");
+            _resetButtons();
+            simRunning = false;
+          }
+        };
+
+        ws.onclose = function () {
+          if (!simRunning) return;  // intentional close (pause/end)
+          setStatus("Simulation finished.", "ok");
+          simRunning = false;
+          _resetButtons();
+          _updateAudio(0);
+        };
+      }
+
+      _connect();
+    }
+
+    function pauseSim() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "pause" }));
+        simRunning = false;
+        document.getElementById("btn-pause").style.display  = "none";
+        document.getElementById("btn-resume").style.display = "block";
+      }
+    }
+
+    function resumeSim() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resume" }));
+        simRunning = true;
+        document.getElementById("btn-pause").style.display  = "block";
+        document.getElementById("btn-resume").style.display = "none";
+      }
+    }
+
+    function _resetButtons() {
+      document.getElementById("btn-run").style.display    = "block";
+      document.getElementById("btn-pause").style.display  = "none";
+      document.getElementById("btn-resume").style.display = "none";
+    }
+
+    function clearAll() {
+      if (ws) { ws.close(); ws = null; }
+      // Remove 3D pin markers and close the mesh popup
+      if (typeof _3dPinMarkers !== 'undefined') {
+        _3dPinMarkers.forEach(function(pin) {
+          map.off('move',   pin.reposition);
+          map.off('zoom',   pin.reposition);
+          map.off('rotate', pin.reposition);
+          map.off('pitch',  pin.reposition);
+          map.off('resize', pin.reposition);
+          if (pin.el.parentNode) pin.el.parentNode.removeChild(pin.el);
+        });
+        _3dPinMarkers.length = 0;
+      }
+      if (typeof closeMeshPopup === 'function') closeMeshPopup();
+      ignitionPoints.length           = 0;
+      waterDrops.length               = 0;
+      containmentPoints               = [];
+      committedContainmentLines.length= 0;
+      _rectSelecting                  = false;
+      _rectStart                      = null;
+      _rectEnd                        = null;
+      simRunning               = false;
+      window._simHistory       = null;
+      _fireOverlayReady        = false;
+      _fireBbox                = null;
+
+      if (map.getSource(SRC_IGNITE))              map.getSource(SRC_IGNITE).setData(emptyFC());
+      if (map.getSource(SRC_WATER))               map.getSource(SRC_WATER).setData(emptyFC());
+      if (map.getSource(SRC_CONTAINMENT))         map.getSource(SRC_CONTAINMENT).setData(emptyFC());
+      if (map.getSource(SRC_CONTAINMENT_MARKERS)) map.getSource(SRC_CONTAINMENT_MARKERS).setData(emptyFC());
+      if (map.getSource(SRC_RECT_SEL))            map.getSource(SRC_RECT_SEL).setData(emptyFC());
+      _simRows = 0; _simCols = 0;
+      _microclimateSummary = null;
+      _lastOptResult = null;
+      var mcPanel = document.getElementById("mc-panel");
+      if (mcPanel) mcPanel.style.display = "none";
+      var cp = document.getElementById("opt-continue");
+      if (cp) cp.style.display = "none";
+      closeCellExplain();
+      closeRectAnalysis();
+
+      // Remove fire overlay layers/sources
+      if (map.getLayer("fire-burning-layer")) map.removeLayer("fire-burning-layer");
+      if (map.getLayer("fire-burned-layer"))  map.removeLayer("fire-burned-layer");
+      if (map.getSource(SRC_BURNING))          map.removeSource(SRC_BURNING);
+      if (map.getSource(SRC_BURNED))           map.removeSource(SRC_BURNED);
+
+      if (_smokeRAF) { cancelAnimationFrame(_smokeRAF); _smokeRAF = null; }
+      if (_windRAF)  { cancelAnimationFrame(_windRAF);  _windRAF  = null; }
+      _particles.length = 0;
+
+      // Clear effect canvases only (glow, smoke, wind)
+      ["glow-canvas", "smoke-canvas", "wind-canvas"].forEach(function (id) {
+        var c = document.getElementById(id);
+        if (c) { var ctx = c.getContext("2d"); ctx.clearRect(0, 0, c.width, c.height); }
+      });
+
+      document.getElementById("atmo-overlay").style.backgroundColor = "rgba(0,0,0,0)";
+      document.getElementById("weather-strip").classList.remove("visible");
+      document.getElementById("timeline-bar").classList.remove("visible");
+
+      _updateAudio(0);
+      refreshIgnList();
+      updateStats(null, null, null, null, null);
+      _resetButtons();
+      document.getElementById("speed-slider").value          = 1;
+      document.getElementById("speed-val").textContent       = "1×";
+
+      // Close optimizer WebSocket and clear mask/ensemble
+      if (wsOpt) { wsOpt.close(); wsOpt = null; }
+      maskPoints    = [];
+      maskCommitted = false;
+      _optimizerRunning = false;
+      if (map.getSource(SRC_MASK))      map.getSource(SRC_MASK).setData(emptyFC());
+      if (map.getSource(SRC_MASK_PREV)) map.getSource(SRC_MASK_PREV).setData(emptyFC());
+      if (map.getLayer("ensemble-layer")) map.setLayoutProperty("ensemble-layer", "visibility", "none");
+      _ensembleVisible = false;
+      document.getElementById("btn-close-mask").style.display = "none";
+      document.getElementById("btn-clear-mask").style.display = "none";
+      document.getElementById("btn-run-opt").disabled = true;
+      document.getElementById("opt-elapsed-row").style.display = "none";
+      document.getElementById("opt-result-box").style.display = "none";
+      _showOptModal(false, 0);
+
+      setStatus("Cleared. Drop ignition points then click Run Simulation.", "info");
+      _dbg("Cleared.", "#a6adc8");
+    }
+
+    // ── Initialise drawing mode ───────────────────────────────────────────────
+    setMode("cursor");
+    _initBrushRing();
+
+    // ── Combined mousedown handler ────────────────────────────────────────────
+    map.getCanvas().addEventListener("mousedown", function (e) {
+      if (e.button !== 0) return;
+
+      // Alt+click → cell explanation (any mode)
+      if (e.altKey) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        var rect  = map.getCanvas().getBoundingClientRect();
+        var point = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "cell_click", lat: point.lat, lon: point.lng }));
+          setStatus("Analysing cell at " + point.lat.toFixed(4) + "°…", "info");
+        } else {
+          setStatus("Start a simulation first to analyse cells.", "info");
+        }
+        return;
+      }
+
+      // Shift+drag in cursor mode → rect selection
+      if (mode === "cursor" && e.shiftKey) {
+        e.preventDefault();
+        var rect2 = map.getCanvas().getBoundingClientRect();
+        var pt    = map.unproject([e.clientX - rect2.left, e.clientY - rect2.top]);
+        _rectSelecting = true;
+        _rectStart = { lat: pt.lat, lng: pt.lng };
+        _rectEnd   = { lat: pt.lat, lng: pt.lng };
+        return;
+      }
+
+      // Water brush start
+      if (mode === "water") {
+        _waterBrushDown = true;
+      }
+    }, { capture: true });
+
+    document.addEventListener("mouseup", function (e) {
+      _waterBrushDown= false;
+      _lastBrushLat  = null;    // reset brush interpolation anchor
+      _lastBrushLng  = null;
+
+      // Finish rect selection
+      if (_rectSelecting && _rectStart && _rectEnd) {
+        _rectSelecting = false;
+        _sendRectAnalysis();
+        // Keep the rectangle overlay visible until analysis comes back or user clears
+      }
+    });
+
+    map.on("mousemove", function (e) {
+      var oe = e.originalEvent;
+      if (oe) _updateBrushRing(oe.clientX, oe.clientY);
+
+      // Water brush painting — distance-based interpolation for gapless strokes
+      if (_waterBrushDown && mode === "water") {
+        var lat = e.lngLat.lat, lng = e.lngLat.lng;
+        if (_lastBrushLat === null) {
+          _applyWaterBrushAt(lat, lng);
+          _lastBrushLat = lat;
+          _lastBrushLng = lng;
+        } else {
+          var p = _getBrushParams();
+          var spacing_m = Math.max(p.radius_m * 0.28, 8);
+          var dlat_m = (lat - _lastBrushLat) * 111320;
+          var dlng_m = (lng - _lastBrushLng) * 111320 * Math.cos((lat + _lastBrushLat) * 0.5 * Math.PI / 180);
+          var dist_m = Math.sqrt(dlat_m * dlat_m + dlng_m * dlng_m);
+          if (dist_m >= spacing_m) {
+            var steps = Math.min(Math.ceil(dist_m / spacing_m), 12);
+            for (var si = 1; si <= steps; si++) {
+              var t = si / steps;
+              _applyWaterBrushAt(_lastBrushLat + t * (lat - _lastBrushLat),
+                                 _lastBrushLng + t * (lng - _lastBrushLng));
+            }
+            _lastBrushLat = lat;
+            _lastBrushLng = lng;
+          }
+        }
+        return;
+      }
+
+      // Rect selection drag
+      if (_rectSelecting && _rectStart) {
+        _rectEnd = { lat: e.lngLat.lat, lng: e.lngLat.lng };
+        _updateRectPreview();
+        return;
+      }
+    });
+
+    map.on("mouseleave", function () {
+      if (_brushRing) _brushRing.style.opacity = "0";
+    });
+
+  </script>
+  <!-- Mesh preview modal + logic -->
+  <div id="mesh-modal" style="display:none; position:fixed; inset:0; z-index:1200; background:rgba(0,0,0,0.8);">
+    <div style="position:absolute; right:18px; top:18px; z-index:1210;">
+      <button onclick="closeMeshModal()" style="padding:8px 12px; font-weight:700;">Close</button>
+    </div>
+    <div id="mesh-canvas-container" style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:72vw; height:72vh; background:#0a0a14; border-radius:8px; overflow:hidden; display:flex;">
+    </div>
+  </div>
+
+  <!-- 3D terrain mesh popup — opens on middle-click -->
+  <div id="mesh-popup">
+    <div id="mesh-popup-header">
+      <div style="overflow:hidden;flex:1;min-width:0">
+        <div id="mesh-popup-title">3D Terrain Mesh</div>
+        <div class="mesh-step-row">
+          <span class="mesh-step-tag" id="mstep-dem">DEM</span>
+          <span class="mesh-step-arrow">→</span>
+          <span class="mesh-step-tag" id="mstep-pts">Point Cloud</span>
+          <span class="mesh-step-arrow">→</span>
+          <span class="mesh-step-tag" id="mstep-tri">Surface</span>
+        </div>
+      </div>
+      <!-- E. Wind button + close -->
+      <button id="mesh-wind-btn" onclick="toggleMeshWind()" title="Overlay wind arrows (reads panel Wind Speed / Dir)">🌬 Wind</button>
+      <button id="mesh-del-btn"  onclick="deleteMeshPin()"   title="Remove this 3D pin from the map">✕ Pin</button>
+      <button id="mesh-popup-close" onclick="closeMeshPopup()" title="Close">✕</button>
+    </div>
+    <div id="mesh-popup-body">
+      <!-- Loading state -->
+      <div id="mesh-popup-loading">
+        <div style="font-size:11px;color:#f9e2af;font-weight:600">Building 3D mesh…</div>
+        <div id="mesh-popup-loadstep" style="font-size:10px;color:#585b70">—</div>
+      </div>
+      <!-- 3-slide carousel — D. Plotly divs replace img tags -->
+      <div id="mesh-carousel-wrap">
+        <div id="mesh-slides">
+          <!-- Slide 0: DEM Heatmap (Plotly) -->
+          <div class="mesh-slide" id="mesh-slide-0">
+            <div id="mesh-plot-0" style="width:100%;height:100%;"></div>
+          </div>
+          <!-- Slide 1: Point Cloud 3D (Plotly) -->
+          <div class="mesh-slide" id="mesh-slide-1">
+            <div id="mesh-plot-1" style="width:100%;height:100%;"></div>
+          </div>
+          <!-- Slide 2: Terrain Surface (Plotly) -->
+          <div class="mesh-slide" id="mesh-slide-2">
+            <div id="mesh-plot-2" style="width:100%;height:100%;"></div>
+          </div>
+        </div>
+        <!-- Nav arrows (hover to reveal) -->
+        <button class="mesh-nav-btn" id="mesh-nav-prev" onclick="meshSlide(-1)">&#8249;</button>
+        <button class="mesh-nav-btn" id="mesh-nav-next" onclick="meshSlide(+1)">&#8250;</button>
+        <!-- Slide dots -->
+        <div class="mesh-dots">
+          <div class="mesh-dot active" id="mesh-dot-0" onclick="meshGoTo(0)"></div>
+          <div class="mesh-dot"        id="mesh-dot-1" onclick="meshGoTo(1)"></div>
+          <div class="mesh-dot"        id="mesh-dot-2" onclick="meshGoTo(2)"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  // Right-click -> request matplotlib mesh images and show in full-screen modal
+  map.on('contextmenu', function (e) {
+    var lat = e.lngLat.lat, lon = e.lngLat.lng;
+    var bboxDeg = Math.min(parseFloat(document.getElementById('bbox').value) || 0.025, 0.04);
+    setStatus('Requesting 3D mesh…', 'info');
+    var container = document.getElementById('mesh-canvas-container');
+    container.innerHTML = '<div style="color:#a6adc8;font-size:13px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">Generating plots…</div>';
+    document.getElementById('mesh-modal').style.display = 'block';
+    fetch('http://localhost:5000/mesh', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ lat: lat, lon: lon, bbox_deg: bboxDeg })
+    }).then(function(r){ return r.json(); }).then(function(data){
+      if (!data || !data.plotly_dem) { setStatus('Invalid mesh response', 'err'); return; }
+      container.innerHTML = '';
+      var cfg = { responsive: true, displayModeBar: false, scrollZoom: true, displaylogo: false };
+      var ids = [
+        ['modal-plot-0', data.plotly_dem],
+        ['modal-plot-1', data.plotly_pts],
+        ['modal-plot-2', data.plotly_tri],
+      ];
+      ids.forEach(function (p) {
+        var d = document.createElement('div');
+        d.id = p[0]; d.style.cssText = 'flex:1;height:100%;min-width:0;';
+        container.appendChild(d);
+        var fig = JSON.parse(p[1]);
+        Plotly.react(d, fig.data, fig.layout, cfg);
+      });
+      setStatus('3D mesh ready — close to return to map.', 'ok');
+    }).catch(function(err){
+      console.error(err);
+      container.innerHTML = '<div style="color:#f38ba8;font-size:13px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">Error: ' + err + '<br><small>(run: python mesh_api.py)</small></div>';
+      setStatus('Mesh request failed: ' + err, 'err');
+    });
+  });
+
+  function closeMeshModal(){ document.getElementById('mesh-modal').style.display='none'; setStatus('Closed mesh preview.', 'info'); }
+  </script>
+
+  <!-- ── 3D popup: Ctrl+click, yellow pins, Plotly interactive carousel ──── -->
+  <script>
+  var MESH_API_URL      = 'http://localhost:5000/mesh';
+  var _3dPinMarkers     = [];
+  var _meshCurrentSlide = 0;
+  var _meshCache        = {};     // B. location cache  key="lat:lon:bbox"
+  var _meshWindOn       = false;  // E. wind-overlay state
+  var _meshWindGrid     = null;   // E. grid metadata for arrow placement
+  var _meshActiveLat    = null;   // lat/lon of the pin whose popup is open
+  var _meshActiveLon    = null;
+
+  // ── Fire overlay state (3D View tab) ─────────────────────────────────────
+  var _sim3d = {
+    active:     false,      // overlay is armed and ready to update
+    fromTab:    false,      // next _showCarousel call came from request3DView()
+    origColors: null,       // ["rgb(r,g,b)",...] — satellite vertex colors (immutable)
+    bounds:     null,       // {west, south, east, north} in degrees
+    nRows:      0,          // mesh vertex rows  (n_mesh_rows from meta)
+    nCols:      0,          // mesh vertex cols  (n_mesh_cols from meta)
+    lastUpdate: 0,          // Date.now() of last Plotly.restyle call
+    INTERVAL:   1800,       // ms between overlay refreshes (throttle)
+  };
+
+  // ── Drag-to-move (skip when clicking buttons) ─────────────────────────────
+  (function () {
+    var popup = document.getElementById('mesh-popup');
+    var hdr   = document.getElementById('mesh-popup-header');
+    var dragging = false, ox = 0, oy = 0;
+    hdr.addEventListener('mousedown', function (e) {
+      if (e.button !== 0 || e.target.closest('button')) return;
+      var r = popup.getBoundingClientRect();
+      ox = e.clientX - r.left; oy = e.clientY - r.top;
+      dragging = true; e.preventDefault();
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      popup.style.left = Math.max(0, Math.min(e.clientX - ox, window.innerWidth  - popup.offsetWidth))  + 'px';
+      popup.style.top  = Math.max(0, Math.min(e.clientY - oy, window.innerHeight - popup.offsetHeight)) + 'px';
+    });
+    document.addEventListener('mouseup', function () { dragging = false; });
+  }());
+
+  // ── Pipeline step indicators ───────────────────────────────────────────────
+  function _setMeshStep(step) {
+    var steps = ['dem', 'pts', 'tri'], idx = steps.indexOf(step);
+    steps.forEach(function (s, i) {
+      var el = document.getElementById('mstep-' + s);
+      if (el) el.className = 'mesh-step-tag' +
+        (step === 'done' || i < idx ? ' done' : i === idx ? ' active' : '');
+    });
+  }
+
+  // ── Carousel navigation — D. trigger Plotly resize after transition ────────
+  function meshGoTo(idx) {
+    _meshCurrentSlide = Math.max(0, Math.min(2, idx));
+    document.getElementById('mesh-slides').style.transform =
+      'translateX(-' + (_meshCurrentSlide * 33.3333) + '%)';
+    [0, 1, 2].forEach(function (i) {
+      var d = document.getElementById('mesh-dot-' + i);
+      if (d) d.className = 'mesh-dot' + (i === _meshCurrentSlide ? ' active' : '');
+    });
+    document.getElementById('mesh-nav-prev').style.opacity = _meshCurrentSlide === 0 ? '0.22' : '';
+    document.getElementById('mesh-nav-next').style.opacity = _meshCurrentSlide === 2 ? '0.22' : '';
+    setTimeout(function () {
+      var el = document.getElementById('mesh-plot-' + _meshCurrentSlide);
+      if (el && el._fullLayout) { try { Plotly.Plots.resize(el); } catch (ex) {} }
+    }, 310);
+  }
+  function meshSlide(dir) { meshGoTo(_meshCurrentSlide + dir); }
+
+  // ── Open popup ─────────────────────────────────────────────────────────────
+  function deleteMeshPin() {
+    var idx = _3dPinMarkers.findIndex(function(p) {
+      return p.lat === _meshActiveLat && p.lon === _meshActiveLon;
+    });
+    if (idx >= 0) {
+      var pin = _3dPinMarkers[idx];
+      map.off('move',   pin.reposition);
+      map.off('zoom',   pin.reposition);
+      map.off('rotate', pin.reposition);
+      map.off('pitch',  pin.reposition);
+      map.off('resize', pin.reposition);
+      if (pin.el.parentNode) pin.el.parentNode.removeChild(pin.el);
+      _3dPinMarkers.splice(idx, 1);
+    }
+    closeMeshPopup();
+  }
+
+  function openMeshPopup(lat, lon, screenX, screenY, extentM, popW, popH) {
+    _meshActiveLat = lat;
+    _meshActiveLon = lon;
+    var popup = document.getElementById('mesh-popup');
+    var pw = popW || 520, ph = popH || 460;
+    popup.style.left   = Math.max(10, Math.min(screenX + 18, window.innerWidth  - pw - 10)) + 'px';
+    popup.style.top    = Math.max(10, Math.min(screenY - 70, window.innerHeight - ph - 10)) + 'px';
+    popup.style.width  = pw + 'px';
+    popup.style.height = ph + 'px';
+    var titleKm = extentM ? ('  ' + (extentM/1000).toFixed(1) + ' km') : '';
+    document.getElementById('mesh-popup-title').textContent =
+      '3D Terrain  —  ' + lat.toFixed(4) + '°N  ' + lon.toFixed(4) + '°E' + titleKm;
+    popup.classList.add('visible');
+
+    var bboxDeg   = Math.min(parseFloat(document.getElementById('bbox').value) || 0.025, 0.04);
+    var windSpeed = parseFloat(document.getElementById('wind-speed').value) || null;
+    var windDir   = parseFloat(document.getElementById('wind-dir').value)   || null;
+    // Include extent in cache key so different sizes don't collide
+    var cacheKey  = lat.toFixed(4) + ':' + lon.toFixed(4) + ':' + bboxDeg.toFixed(4)
+                    + ':' + (extentM ? extentM.toFixed(0) : '0');
+
+    // B. Serve from cache if available
+    if (_meshCache[cacheKey]) {
+      document.getElementById('mesh-popup-loading').style.display = 'none';
+      document.getElementById('mesh-carousel-wrap').style.display = 'block';
+      _setMeshStep('done');
+      _showCarousel(_meshCache[cacheKey]);
+      setStatus('3D plots loaded from cache.', 'ok');
+      return;
+    }
+
+    document.getElementById('mesh-popup-loading').style.display = 'flex';
+    document.getElementById('mesh-carousel-wrap').style.display = 'none';
+    document.getElementById('mesh-popup-loadstep').textContent  = 'Fetching DEM…';
+    _setMeshStep('dem');
+
+    var reqBody = { lat: lat, lon: lon, bbox_deg: bboxDeg,
+                    wind_speed: windSpeed, wind_dir: windDir };
+    if (extentM) reqBody.extent_m = extentM;
+
+    fetch(MESH_API_URL, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reqBody)
+    })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      _setMeshStep('pts');
+      document.getElementById('mesh-popup-loadstep').textContent = 'Building point cloud…';
+      return r.json();
+    })
+    .then(function (data) {
+      _setMeshStep('tri');
+      document.getElementById('mesh-popup-loadstep').textContent = 'Rendering Plotly figures…';
+      _meshCache[cacheKey] = data;
+      return new Promise(function (res) { setTimeout(function () { res(data); }, 30); });
+    })
+    .then(function (data) {
+      _setMeshStep('done');
+      _showCarousel(data);
+    })
+    .catch(function (err) {
+      document.getElementById('mesh-popup-loadstep').textContent =
+        'Error: ' + err + '  (run: python mesh_api.py)';
+      _dbg('Mesh popup error: ' + err, '#f38ba8');
+    });
+  }
+
+  // ── D. Render interactive Plotly figures into carousel slides ─────────────
+  function _showCarousel(data) {
+    if (!data || !data.plotly_dem) {
+      document.getElementById('mesh-popup-loadstep').textContent = 'No plot data received.';
+      return;
+    }
+    _meshWindGrid = data.wind_grid || null;
+
+    var pairs = [
+      ['mesh-plot-0', data.plotly_dem],
+      ['mesh-plot-1', data.plotly_pts],
+      ['mesh-plot-2', data.plotly_tri],
+    ];
+    var cfg = {
+      responsive: true, displayModeBar: true, displaylogo: false, scrollZoom: true,
+      modeBarButtonsToRemove: ['sendDataToCloud', 'lasso2d', 'select2d'],
+    };
+    pairs.forEach(function (p) {
+      var fig = JSON.parse(p[1]);
+      var el  = document.getElementById(p[0]);
+      if (el) Plotly.react(el, fig.data, fig.layout, cfg);
+    });
+
+    document.getElementById('mesh-popup-loading').style.display = 'none';
+    document.getElementById('mesh-carousel-wrap').style.display = 'block';
+    _meshWindOn = false;
+    var wb = document.getElementById('mesh-wind-btn');
+    if (wb) wb.classList.remove('active');
+    meshGoTo(0);
+
+    if (data.meta) {
+      var airTag = (data.wind_grid && data.wind_grid.has_air) ? ' | air-corrected wind' : '';
+      _dbg('Mesh: ' + data.meta.n_pts + ' pts | ' + (data.meta.n_mesh||'?') +
+           ' mesh pts | VEX ' + data.meta.vex + 'x  dem=' +
+           data.meta.dem_shape[0] + 'x' + data.meta.dem_shape[1] + airTag, '#a6adc8');
+    }
+    setStatus('3D plots ready — drag to rotate, scroll to zoom.', 'ok');
+
+    // Arm fire overlay if this carousel was triggered from the 3D View tab
+    if (_sim3d.fromTab) {
+      _sim3d.fromTab = false;
+      _setup3DFireOverlay(data);
+    }
+  }
+
+  // ── E. Wind arrows toggle ─────────────────────────────────────────────────
+  function toggleMeshWind() {
+    if (!_meshWindGrid) return;
+    _meshWindOn = !_meshWindOn;
+    var btn = document.getElementById('mesh-wind-btn');
+    if (btn) btn.classList.toggle('active', _meshWindOn);
+    if (_meshWindOn) {
+      var speed  = parseFloat(document.getElementById('wind-speed').value) || 5;
+      var dirDeg = parseFloat(document.getElementById('wind-dir').value)   || 330;
+      var dirRad = dirDeg * Math.PI / 180;
+      var u = -Math.sin(dirRad);   // meteorological "from" convention → eastward
+      var v = -Math.cos(dirRad);   // northward
+      _drawWindArrows(u, v, speed);
+    } else {
+      _eraseWindArrows();
+    }
+  }
+
+  function _drawWindArrows(u_uni, v_uni, speed) {
+    var g    = _meshWindGrid;
+    var xs   = g.xs, ys = g.ys;
+    // Estimate grid span from the arrow xs/ys extents
+    var minX = xs.reduce(function(a,b){return Math.min(a,b);}),
+        maxX = xs.reduce(function(a,b){return Math.max(a,b);}),
+        minY = ys.reduce(function(a,b){return Math.min(a,b);}),
+        maxY = ys.reduce(function(a,b){return Math.max(a,b);});
+    var span    = Math.max(maxX - minX, maxY - minY) || 1000;
+    var refSpd  = 5;                         // speed (m/s) that fills 9% of span
+    var alenRef = span * 0.09;
+
+    // 2D quiver (slide 0) and cone data (slides 1 & 2)
+    var ax = [], ay = [], cx = [], cy = [], cz1 = [], cz2 = [], nu = [], nv = [];
+
+    // Offset cones above terrain surface so they're always visible
+    var coneOffsetReal = alenRef * 0.06;          // ~6% of scene span in real metres
+    var coneOffsetVex  = coneOffsetReal * (g.vex || 1);  // same offset in VEX space
+
+    for (var i = 0; i < xs.length; i++) {
+      var ui, vi, alen;
+      if (g.has_air && g.us && g.vs) {
+        ui = g.us[i]; vi = g.vs[i];
+        var mag = Math.sqrt(ui*ui + vi*vi) || 0.001;
+        alen = alenRef * Math.min(mag / refSpd, 2.5);
+        var scale2d = alen / mag;
+        ax.push(xs[i], xs[i] + ui * scale2d, null);
+        ay.push(ys[i], ys[i] + vi * scale2d, null);
+      } else {
+        alen = alenRef * Math.min(speed / refSpd, 2.5);
+        ax.push(xs[i], xs[i] + u_uni * alen, null);
+        ay.push(ys[i], ys[i] + v_uni * alen, null);
+        ui = u_uni * speed; vi = v_uni * speed;
+      }
+      cx.push(xs[i]); cy.push(ys[i]);
+      // Place cone tails on terrain surface + small offset
+      cz1.push((g.zs_real ? g.zs_real[i] : g.dem_mean) + coneOffsetReal);
+      cz2.push((g.zs_vex  ? g.zs_vex[i]  : 0          ) + coneOffsetVex);
+      nu.push(ui); nv.push(vi);
+    }
+
+    // 2D quiver: line segments + dot markers at arrow tips for arrowhead effect
+    var tipX = [], tipY = [];
+    for (var j = 0; j < ax.length; j += 3) {
+      if (ax[j+1] != null) { tipX.push(ax[j+1]); tipY.push(ay[j+1]); }
+    }
+    Plotly.addTraces('mesh-plot-0', [
+      { type: 'scatter', mode: 'lines', x: ax, y: ay,
+        line: { color: '#89dceb', width: 1.6 },
+        hoverinfo: 'none', showlegend: false, name: '__wind__' },
+      { type: 'scatter', mode: 'markers', x: tipX, y: tipY,
+        marker: { symbol: 'circle', size: 4, color: '#89dceb' },
+        hoverinfo: 'none', showlegend: false, name: '__wind__' },
+    ]);
+
+    var sizeref = span * 0.045;
+    var baseCone = {
+      type: 'cone', x: cx, y: cy, u: nu, v: nv, w: Array(cx.length).fill(0),
+      colorscale: [[0, '#89b4fa'], [1, '#89dceb']], showscale: false,
+      sizemode: 'absolute', sizeref: sizeref, anchor: 'tail',
+      hoverinfo: 'none', showlegend: false, name: '__wind__',
+    };
+    Plotly.addTraces('mesh-plot-1', Object.assign({}, baseCone, { z: cz1 }));
+    Plotly.addTraces('mesh-plot-2', Object.assign({}, baseCone, { z: cz2 }));
+  }
+
+  function _eraseWindArrows() {
+    ['mesh-plot-0', 'mesh-plot-1', 'mesh-plot-2'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el || !el.data) return;
+      var rem = [];
+      el.data.forEach(function (tr, i) { if (tr.name === '__wind__') rem.unshift(i); });
+      if (rem.length) Plotly.deleteTraces(el, rem);
+    });
+  }
+
+  // ── 3-D fire overlay ─────────────────────────────────────────────────────
+
+  function _setup3DFireOverlay(data) {
+    try {
+      var triData = JSON.parse(data.plotly_tri);
+      var trace   = triData.data && triData.data[0];
+      if (!trace || !trace.vertexcolor || !trace.vertexcolor.length) {
+        _dbg('3D fire overlay: no vertexcolor in mesh (no satellite texture?)', '#f9e2af');
+        return;
+      }
+      var m = data.meta;
+      if (!m || !m.bounds || !m.n_mesh_rows || !m.n_mesh_cols) return;
+
+      _sim3d.origColors = trace.vertexcolor.slice();
+      _sim3d.bounds     = m.bounds;
+      _sim3d.nRows      = m.n_mesh_rows;
+      _sim3d.nCols      = m.n_mesh_cols;
+      _sim3d.lastUpdate = 0;
+      _sim3d.active     = true;
+      _dbg('3D fire overlay ready (' + _sim3d.nRows + 'x' + _sim3d.nCols +
+           ' verts, bounds ' + m.bounds.west.toFixed(3) + '...' +
+           m.bounds.east.toFixed(3) + ')', '#a6e3a1');
+    } catch (e) {
+      _dbg('3D fire overlay setup error: ' + e, '#f38ba8');
+    }
+  }
+
+  function _rasterizeFireState(gjBurning, gjBurned, bounds, nR, nC) {
+    // Upscale canvas for sub-cell coverage accuracy
+    var SCALE = Math.max(2, Math.min(6, Math.floor(400 / Math.max(nR, nC))));
+    var CW = nC * SCALE, CH = nR * SCALE;
+    var cv  = document.createElement('canvas');
+    cv.width = CW;  cv.height = CH;
+    var ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, CW, CH);
+
+    function proj(lon, lat) {
+      return [
+        (lon - bounds.west)  / (bounds.east  - bounds.west)  * CW,
+        (bounds.north - lat) / (bounds.north - bounds.south) * CH
+      ];
+    }
+
+    function fillFC(gj, color) {
+      if (!gj || !gj.features || !gj.features.length) return;
+      ctx.fillStyle = color;
+      gj.features.forEach(function(feat) {
+        var g = feat.geometry; if (!g) return;
+        var polys = g.type === 'MultiPolygon' ? g.coordinates : [g.coordinates];
+        polys.forEach(function(poly) {
+          poly.forEach(function(ring, ri) {
+            if (ri > 0) return;   // skip holes for performance
+            if (!ring.length) return;
+            ctx.beginPath();
+            var p0 = proj(ring[0][0], ring[0][1]);
+            ctx.moveTo(p0[0], p0[1]);
+            for (var k = 1; k < ring.length; k++) {
+              var pk = proj(ring[k][0], ring[k][1]); ctx.lineTo(pk[0], pk[1]);
+            }
+            ctx.closePath(); ctx.fill();
+          });
+        });
+      });
+    }
+
+    // Draw burned first (state=2 → red channel), then burning on top (state=1 → green)
+    fillFC(gjBurned,  'rgba(200,0,0,1)');
+    fillFC(gjBurning, 'rgba(0,200,0,1)');
+
+    var px = ctx.getImageData(0, 0, CW, CH).data;
+    var grid = new Uint8Array(nR * nC);
+
+    // Mesh row 0 = south → canvas row CH-1 (Y-flip)
+    for (var ri = 0; ri < nR; ri++) {
+      var cy = Math.min(CH - 1, Math.round(CH - (ri + 0.5) * SCALE));
+      for (var ci = 0; ci < nC; ci++) {
+        var cx   = Math.min(CW - 1, Math.round((ci + 0.5) * SCALE));
+        var base = (cy * CW + cx) * 4;
+        var r = px[base], gv = px[base + 1];
+        grid[ri * nC + ci] = gv > 100 ? 1 : (r > 100 ? 2 : 0);
+      }
+    }
+    return grid;
+  }
+
+  function _blendFire(orig, state) {
+    if (state === 0) return orig;
+    var m = orig.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/);
+    if (!m) return orig;
+    var sr = +m[1], sg = +m[2], sb = +m[3], fr, fg, fb, fa;
+    if (state === 1) { fr = 255; fg = 120; fb =  0; fa = 0.72; }   // burning → vivid orange
+    else             { fr =  50; fg =  20; fb = 10; fa = 0.58; }   // burned  → dark charcoal
+    return 'rgb(' +
+      Math.round(sr*(1-fa) + fr*fa) + ',' +
+      Math.round(sg*(1-fa) + fg*fa) + ',' +
+      Math.round(sb*(1-fa) + fb*fa) + ')';
+  }
+
+  function _update3DFireOverlay(gjBurning, gjBurned) {
+    if (!_sim3d.active || !_sim3d.origColors || !_sim3d.bounds) return;
+    var el = document.getElementById('mesh-plot-2');
+    if (!el || !el._fullData || !el._fullData.length) return;
+
+    var grid = _rasterizeFireState(gjBurning, gjBurned,
+                                   _sim3d.bounds, _sim3d.nRows, _sim3d.nCols);
+    var orig = _sim3d.origColors;
+    var nc   = new Array(orig.length);
+    for (var i = 0; i < orig.length; i++) nc[i] = _blendFire(orig[i], grid[i]);
+    Plotly.restyle(el, { vertexcolor: [nc] }, [0]);
+  }
+
+  // ── Close popup ────────────────────────────────────────────────────────────
+  function closeMeshPopup() {
+    var popup = document.getElementById('mesh-popup');
+    if (popup) popup.classList.remove('visible');
+    ['mesh-plot-0', 'mesh-plot-1', 'mesh-plot-2'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) { try { Plotly.purge(el); } catch (ex) {} }
+    });
+    _meshWindOn = false;
+    _meshCurrentSlide = 0;
+    _sim3d.active     = false;
+    _sim3d.origColors = null;
+  }
+
+  // ── Yellow "3D" pin marker ─────────────────────────────────────────────────
+  // position:fixed on document.body — completely outside the map's DOM so MapLibre
+  // can never touch this element.  We convert geographic → viewport coords manually:
+  //   mapRect.left + map.project([lon,lat]).x  = viewport X of the geographic point.
+  // mousedown stops propagation so MapLibre never starts a pan gesture from the pin.
+  function _add3dPin(lat, lon) {
+    var el = document.createElement('div');
+    el.style.cssText = [
+      'position:fixed; z-index:9999;',
+      'width:30px; height:30px; border-radius:50%;',
+      'background: radial-gradient(circle at 38% 38%, #ffe569, #f5c200);',
+      'border: 2px solid rgba(255,245,100,0.70);',
+      'display:flex; align-items:center; justify-content:center;',
+      'font-size:8.5px; font-weight:800; color:#1e1e2e; letter-spacing:0.04em;',
+      'cursor:pointer;',
+      'box-shadow: 0 2px 8px rgba(249,220,47,0.55), 0 0 14px rgba(249,220,47,0.22);',
+      'user-select:none; transition:transform 0.12s;',
+    ].join('');
+    el.textContent = '3D';
+    el.title = 'Ctrl+click pin — click to reopen 3D mesh';
+
+    el.addEventListener('mouseenter', function () { el.style.transform = 'scale(1.18)'; });
+    el.addEventListener('mouseleave', function () { el.style.transform = '';            });
+    // Block mousedown so MapLibre never interprets pressing the pin as a pan gesture
+    el.addEventListener('mousedown',  function (ev) { ev.stopPropagation(); ev.preventDefault(); });
+    el.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      var r = el.getBoundingClientRect();
+      openMeshPopup(lat, lon, r.left + 15, r.top + 15);
+    });
+
+    function reposition() {
+      var mapRect = map.getContainer().getBoundingClientRect();
+      var pt      = map.project([lon, lat]);
+      el.style.left = (mapRect.left + pt.x - 15) + 'px';
+      el.style.top  = (mapRect.top  + pt.y - 15) + 'px';
+    }
+
+    document.body.appendChild(el);
+    reposition();
+
+    map.on('move',   reposition);
+    map.on('zoom',   reposition);
+    map.on('rotate', reposition);
+    map.on('pitch',  reposition);
+    map.on('resize', reposition);
+
+    _3dPinMarkers.push({ el: el, reposition: reposition, lat: lat, lon: lon });
+  }
+
+  // ── Optimizer progress modal ─────────────────────────────────────────────
+  </script>
+  <div id="opt-modal">
+    <div id="opt-modal-title">
+      <span class="opt-spin">🔥</span> Calibrating · projecting +1 h
+    </div>
+    <div id="opt-progress-track"><div id="opt-progress-fill"></div></div>
+    <div class="opt-stat-row">
+      <span>Fire age (target)</span><b id="opt-modal-age">—</b>
+    </div>
+    <div class="opt-stat-row">
+      <span>Iteration</span><b id="opt-iter-val">—</b>
+    </div>
+    <div class="opt-stat-row">
+      <span>Particles evaluated</span><b id="opt-done-val">—</b>
+    </div>
+    <div class="opt-stat-row">
+      <span>ETA</span><b id="opt-eta-val">—</b>
+    </div>
+    <div id="opt-modal-iou">IoU —</div>
+    <button id="opt-modal-btn" onclick="document.getElementById('opt-modal').classList.remove('visible')">Minimise</button>
+  </div>
+  <script>
+
+  // A. Ctrl + Left-click — intercept before MapLibre sees the event.
+  // stopImmediatePropagation: prevents MapLibre's Ctrl+drag rotate gesture (bug-b).
+  // The 'click' guard in onMapClick handles the residual click event (bug-a).
+  map.getCanvas().addEventListener('mousedown', function (e) {
+    if (!(e.button === 0 && e.ctrlKey)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();    // block MapLibre rotate gesture
+    var rect  = map.getCanvas().getBoundingClientRect();
+    var point = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+    _add3dPin(point.lat, point.lng);
+    openMeshPopup(point.lat, point.lng, e.clientX, e.clientY);
+  }, { capture: true });
+  </script>
+</body>
+</html>

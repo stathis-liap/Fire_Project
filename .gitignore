@@ -1,0 +1,13 @@
+# Map Data, Images, and DBs
+*.tif
+*.png
+*.jpg
+*.npz
+*.geojson
+*.db
+*.db-shm
+
+# Python Cache
+__pycache__/
+*.pyc
+.vscode/

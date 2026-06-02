@@ -11,6 +11,10 @@ WIND_SPEED = 1.0
 WIND_DIRECTION = 45
 
 # --- 3. Fire Physics ---
-BURN_TIME_STEPS = 60         # Increased to 60 so fire survives low-wind conditions
+BURN_TIME_STEPS = 200        # Physical burn time: 200 × dt = 20 min per cell (lowered ignition threshold to ROS ≥ 3.5 m/min)
 P_BASE_SPREAD = 0.5          # Balanced spread (if used in future probabilistic models)
 MAX_SIMULATION_STEPS = 5000  # How many steps to calculate before stopping
+dt = 0.1                     # Minutes of real fire time per simulation step
+
+# --- 4. Time ---
+SIMULATION_START_TIME = "14:00"   # Clock time shown when the fire ignites (HH:MM)
