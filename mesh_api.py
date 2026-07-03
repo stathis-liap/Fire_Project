@@ -22,7 +22,7 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT_DIR)
 
 import config
-from core.landscape import Landscape
+from core.landscape import Landscape, decode_corine_tif, decode_corine_png
 
 try:
     import rasterio
@@ -289,6 +289,41 @@ def _load_real_dem(lat: float, lon: float, n: int,
         return dem, land, cell_m, (west, south, east, north)
 
 
+def _load_real_fuel_map(land: Landscape, west: float, south: float,
+                        east: float, north: float, n: int) -> bool:
+    """
+    Fetch CORINE Land Cover for the popup bbox and decode it into
+    ``land.fuel_map`` so the wind field (air.py Layer 1 — WAF) sees real
+    per-cell vegetation instead of a uniform placeholder.
+
+    Without this, every popup cell defaults to the same fuel index (0),
+    the Wind Adjustment Factor is spatially uniform, and the corrected
+    wind field ends up pointing almost the same direction everywhere
+    (only the small upslope-draft term varies cell to cell).
+
+    Returns True on success; land.fuel_map is left untouched (all-zero)
+    on any failure so the caller can fall back gracefully.
+    """
+    try:
+        from pipeline.auto_fetcher import fetch_corine_land_cover
+        corine_path = fetch_corine_land_cover(
+            west, south, east, north, width=n, height=n, output_dir=ROOT_DIR)
+        if not corine_path:
+            return False
+
+        ext = str(corine_path).lower()
+        if ext.endswith((".tif", ".tiff")):
+            if not _RASTERIO_OK:
+                return False
+            land.fuel_map = decode_corine_tif(corine_path, land.fuel_names, n, n)
+        else:
+            land.fuel_map = decode_corine_png(corine_path, land.fuel_names, n, n)
+        return True
+    except Exception as exc:
+        print(f"[mesh_api] CORINE fuel-map load failed ({exc}); wind uses uniform WAF")
+        return False
+
+
 # ── Satellite texture ──────────────────────────────────────────────────────
 
 def _bilinear_sample(arr: np.ndarray,
@@ -453,6 +488,13 @@ def make_mesh():
     rows, cols = dem.shape
     b_west, b_south, b_east, b_north = bounds
 
+    fuel_loaded = False
+    if wind_speed is not None and wind_dir is not None:
+        # Real vegetation cover drives spatial WAF variation in air.py — only
+        # needed when we're actually going to compute a wind field.
+        fuel_loaded = _load_real_fuel_map(
+            land, b_west, b_south, b_east, b_north, n)
+
     xs_1d = (np.arange(cols) - cols // 2) * cell_m
     ys_1d = (np.arange(rows) - rows // 2) * cell_m
 
@@ -607,11 +649,12 @@ def make_mesh():
         "dem_mean": float(dem.mean()),
         "vex":      round(VEX, 2),
         "has_air":  False,
+        "has_fuel": fuel_loaded,
     }
 
     if wind_speed is not None and wind_dir is not None:
         try:
-            from air.air import compute_wind_field
+            from air.air import compute_wind_field, compute_vertical_wind
             spd      = float(wind_speed)
             from_deg = float(wind_dir)
             push_deg = (from_deg + 180.0) % 360.0
@@ -621,11 +664,16 @@ def make_mesh():
             mesh_cfg = _t.SimpleNamespace(**vars(config))
             mesh_cfg.CELL_SIZE_METERS = cell_m
             U, V = compute_wind_field(land, mesh_cfg)
+            # Vertical component (anabatic/katabatic + divergence compensation)
+            # for true-3D cones; no fire state in the static popup.
+            W = compute_vertical_wind(land, U, V, cell_size_m=cell_m)
             # Subsample to arrow grid
             U_s = U[::step_r, ::step_c].ravel()
             V_s = V[::step_r, ::step_c].ravel()
+            W_s = W[::step_r, ::step_c].ravel()
             wind_grid["us"]      = U_s.tolist()
             wind_grid["vs"]      = V_s.tolist()
+            wind_grid["ws"]      = W_s.tolist()
             wind_grid["has_air"] = True
         except Exception as exc:
             wind_grid["air_error"] = str(exc)

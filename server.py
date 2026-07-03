@@ -777,6 +777,65 @@ async def _handle_optimizer_session(websocket, send, msg_init: dict) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Hindcast session (WebSocket wrapper around hindcast_optimizer)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _handle_hindcast_session(websocket, send, msg_init: dict) -> None:
+    log.info("Hindcast session opened  %s", websocket.remote_address)
+
+    fire_name = msg_init.get("fire_name", "Evoia 2021")
+    date_start = msg_init.get("date_start", "")
+    date_end = msg_init.get("date_end", "")
+    hindcast_hours = float(msg_init.get("hindcast_hours", 6.0))
+    maxiter = int(msg_init.get("maxiter", 20))
+    popsize = int(msg_init.get("popsize", 12))
+    terrain_buf = float(msg_init.get("terrain_buf", 0.25))
+
+    await send({"type": "hindcast_status",
+                "message": f"Starting hindcast for {fire_name}..."})
+
+    try:
+        from pipeline.hindcast_runner import run_hindcast_async
+
+        async def _progress(type, step, status, message, **kwargs):
+            await send({
+                "type": type,
+                "step": step,
+                "status": status,
+                "message": message,
+                **kwargs
+            })
+
+        result = await run_hindcast_async(
+            fire_name=fire_name,
+            date_start=date_start,
+            date_end=date_end,
+            hindcast_hours=hindcast_hours,
+            maxiter=maxiter,
+            popsize=popsize,
+            terrain_buf=terrain_buf,
+            progress_callback=_progress,
+        )
+
+        if result.get("error"):
+            await send({"type": "error", "message": result["error"]})
+        else:
+            await send({
+                "type": "hindcast_result",
+                "best_iou": result["best_iou"],
+                "best_params": result["best_params"],
+                "heatmap_b64": result["heatmap_b64"],
+                "overlay_b64": result["overlay_b64"],
+            })
+    except Exception as exc:
+        log.error("Hindcast failed: %s", exc)
+        traceback.print_exc()
+        await send({"type": "error", "message": f"Hindcast failed: {exc}"})
+
+    log.info("Hindcast session closed  %s", websocket.remote_address)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Per-connection handler
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -802,6 +861,10 @@ async def _handle(websocket):
 
     if msg_type_recv == "init_optimizer":
         await _handle_optimizer_session(websocket, send, msg)
+        return
+
+    if msg_type_recv == "init_hindcast":
+        await _handle_hindcast_session(websocket, send, msg)
         return
 
     if msg_type_recv != "init":

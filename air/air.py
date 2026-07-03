@@ -125,9 +125,11 @@ def _upslope_draft(
     # Clip slope_mag to prevent unrealistic values from DEM artefacts
     draft_intensity = np.clip(alignment * slope_mag, 0.0, 2.0)
 
-    # South-facing aspect bonus for Mediterranean summer conditions
-    # Aspect: compass bearing of the uphill direction (0 = N, π = S)
-    aspect = np.arctan2(grad_x, -grad_y)            # radians, 0 = north
+    # South-facing aspect bonus for Mediterranean summer conditions.
+    # Grid convention: row 0 = SOUTH (see Landscape flipud), so grad_y is the
+    # northward elevation gradient. aspect = 0 → uphill points south, i.e. the
+    # slope FACES north; aspect = π → slope faces south (gets the bonus below).
+    aspect = np.arctan2(grad_x, -grad_y)
     south_factor = 1.0 + 0.15 * np.clip(np.cos(aspect - np.pi), 0.0, 1.0)
 
     # Empirical scale: draft adds up to ~25 % of base wind on steep upslopes
@@ -298,6 +300,7 @@ def compute_vertical_wind(
     wind_u_grid: np.ndarray,
     wind_v_grid: np.ndarray,
     fire_mask: np.ndarray = None,
+    cell_size_m: float = None,
 ) -> np.ndarray:
     """
     Compute the vertical wind component (w) for 3D visualization.
@@ -325,6 +328,9 @@ def compute_vertical_wind(
     wind_v_grid : (rows, cols) horizontal wind North–South (m/s)
     fire_mask : (rows, cols) optional bool; True = burning cells
                 If None, no thermal updraft is added.
+    cell_size_m : optional float — physical cell size of *this* grid.
+                Pass explicitly when the grid does not match
+                landscape.config.CELL_SIZE_METERS (e.g. the mesh popup DEM).
 
     Returns
     -------
@@ -332,7 +338,10 @@ def compute_vertical_wind(
              Positive = updraft, Negative = downdraft
     """
     rows, cols = landscape.shape
-    dx = dy = float(landscape.config.CELL_SIZE_METERS if hasattr(landscape, "config") else 5.0)
+    if cell_size_m is not None:
+        dx = dy = float(cell_size_m)
+    else:
+        dx = dy = float(landscape.config.CELL_SIZE_METERS if hasattr(landscape, "config") else 5.0)
 
     # Initialize vertical wind field
     wind_w = np.zeros((rows, cols), dtype=np.float32)
@@ -389,6 +398,18 @@ def compute_vertical_wind(
     dU_dx = np.gradient(wind_u_grid.astype(np.float64), dx, axis=1)
     dV_dy = np.gradient(wind_v_grid.astype(np.float64), dy, axis=0)
     divergence_horiz = dU_dx + dV_dy
+
+    # Smooth before applying the boundary-layer scale factor. wind_u_grid/
+    # wind_v_grid carry the raw pixel-scale WAF field (real fuel maps have
+    # sharp single-cell jumps at land-cover boundaries, e.g. forest→grass),
+    # so an unsmoothed finite-difference gradient spikes to tens of m/s at
+    # those edges — a discretisation artefact, not real vertical motion. A
+    # 500 m-thick boundary layer physically integrates over a horizontal
+    # patch much larger than one DEM pixel, so it cannot respond to
+    # single-cell noise; smoothing over a few cells approximates that
+    # spatial averaging before the compensation is computed.
+    from scipy.ndimage import gaussian_filter
+    divergence_horiz = gaussian_filter(divergence_horiz, sigma=2.0)
 
     # Simple model: compensate divergence with downward motion
     # (assumes typical boundary layer height ~ 500 m)

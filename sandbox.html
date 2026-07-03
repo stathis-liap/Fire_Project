@@ -29,7 +29,7 @@
 
     /* ── Weather strip ───────────────────────────────────────────────────── */
     #weather-strip {
-      position: absolute; top: 0; left: 0; right: 0;
+      position: absolute; top: 0; left: 48px; right: 0;
       display: none; align-items: center; gap: 16px;
       padding: 5px 16px;
       background: rgba(17,17,27,0.85);
@@ -44,24 +44,93 @@
     #ws-arrow    { display: inline-block; font-size: 15px; transition: transform 2s ease; }
 
     /* ── Control panel ───────────────────────────────────────────────────── */
-    #panel {
-      position: absolute; top: 14px; left: 14px;
-      width: 270px; max-height: calc(100vh - 100px);
+    /* ── Left icon rail ──────────────────────────────────────────────────── */
+    #rail {
+      position: absolute; top: 0; left: 0; bottom: 0;
+      width: 48px; z-index: 120;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 8px 0; gap: 4px;
+      background: rgba(17,17,27,0.96);
+      border-right: 1px solid rgba(137,180,250,0.15);
+      backdrop-filter: blur(10px);
+      user-select: none;
+    }
+    #rail-logo { font-size: 20px; margin-bottom: 6px; cursor: default; }
+    .rail-btn {
+      position: relative;
+      width: 36px; height: 36px; border-radius: 8px;
+      border: 1px solid transparent; background: transparent;
+      color: #a6adc8; font-size: 16px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .rail-btn:hover  { background: #1e1e2e; }
+    .rail-btn.active { background: #313244; border-color: rgba(137,180,250,0.35); }
+    .rail-badge {
+      position: absolute; top: 2px; right: 2px;
+      min-width: 14px; height: 14px; border-radius: 7px;
+      background: #f38ba8; color: #11111b;
+      font-size: 9px; font-weight: 700; line-height: 14px;
+      padding: 0 3px; display: none; text-align: center;
+    }
+    .rail-badge:empty {   /* dot style when no counter text */
+      min-width: 8px; width: 8px; height: 8px; border-radius: 4px;
+      padding: 0; top: 4px; right: 4px;
+    }
+    .rail-badge.visible { display: block; }
+    .rail-spacer { flex: 1; }
+
+    /* ── Drawer (one pane open at a time) ────────────────────────────────── */
+    #drawer {
+      position: absolute; top: 0; left: 48px; bottom: 0;
+      width: 292px; z-index: 115;
+      background: rgba(17,17,27,0.93);
+      border-right: 1px solid rgba(137,180,250,0.18);
+      backdrop-filter: blur(10px);
+      box-shadow: 4px 0 32px rgba(0,0,0,0.45);
+      display: none; flex-direction: column;
+      user-select: none;
+    }
+    #drawer.open { display: flex; }
+    #drawer-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 14px 8px; flex-shrink: 0;
+      font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;
+      color: #89b4fa; font-weight: 700;
+    }
+    #drawer-close {
+      background: none; border: none; color: #585b70;
+      font-size: 14px; cursor: pointer; padding: 2px 6px;
+    }
+    #drawer-close:hover { color: #f38ba8; }
+    #drawer-body { flex: 1; overflow-y: auto; padding: 0 14px 10px; }
+    #drawer-body::-webkit-scrollbar { width: 4px; }
+    #drawer-body::-webkit-scrollbar-thumb { background: #313244; border-radius: 2px; }
+    .drawer-pane { display: none; }
+    .drawer-pane.active { display: block; }
+    #drawer-footer {
+      flex-shrink: 0; padding: 8px 14px 10px;
+      border-top: 1px solid #313244;
+    }
+
+    /* ── Transport pill (run controls, always visible) ───────────────────── */
+    #run-pill {
+      position: absolute; left: 62px; bottom: 64px; z-index: 118;
+      display: flex; align-items: center; gap: 8px;
       background: rgba(17,17,27,0.93);
       border: 1px solid rgba(137,180,250,0.18);
-      border-radius: 10px; padding: 14px;
+      border-radius: 10px; padding: 7px 10px;
       backdrop-filter: blur(10px);
       box-shadow: 0 4px 32px rgba(0,0,0,0.55);
-      z-index: 100; overflow-y: auto; user-select: none;
+      user-select: none;
+      transition: left 0.2s ease;
     }
-    #panel::-webkit-scrollbar { width: 4px; }
-    #panel::-webkit-scrollbar-thumb { background: #313244; border-radius: 2px; }
-    #panel h1 {
-      font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;
-      color: #89b4fa; margin-bottom: 10px;
-      display: flex; align-items: center; gap: 6px;
-    }
-    #panel h1 span.flame { font-size: 16px; }
+    body.drawer-open #run-pill { left: 354px; }
+    #run-pill .btn { width: auto; margin: 0; padding: 7px 14px; white-space: nowrap; }
+    #run-pill .speed-row { margin: 0; min-width: 120px; }
+    #run-pill .speed-row label { min-width: 0; }
+    #run-pill #stats { margin: 0; }
+    #run-pill #stats span { padding: 2px 8px; white-space: nowrap; }
     .sect-label {
       font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
       color: #585b70; margin: 10px 0 5px;
@@ -482,7 +551,7 @@
 
     /* ── Timeline bar ────────────────────────────────────────────────────── */
     #timeline-bar {
-      position: absolute; bottom: 0; left: 0; right: 0;
+      position: absolute; bottom: 0; left: 48px; right: 0;
       display: none; flex-direction: column;
       background: rgba(17,17,27,0.9);
       border-top: 1px solid rgba(137,180,250,0.18);
@@ -535,7 +604,7 @@
 
     /* ── Vegetation legend ───────────────────────────────────────────────── */
     #veg-legend {
-      position: absolute; bottom: 50px; left: 50%;
+      position: absolute; bottom: 64px; left: 50%;
       transform: translateX(-50%);
       display: none; flex-wrap: wrap; gap: 4px;
       max-width: 600px; justify-content: center;
@@ -551,56 +620,31 @@
 
     /* ── Debug overlay ───────────────────────────────────────────────────── */
     #dbg {
-      position: fixed; top: 8px; right: 8px; z-index: 9999;
+      position: fixed; bottom: 8px; right: 8px; z-index: 9999;
       background: rgba(0,0,0,0.82); color: #a6e3a1;
       font: 11px/1.5 monospace; padding: 8px 12px; border-radius: 6px;
       max-width: 400px; max-height: 220px; overflow-y: auto; pointer-events: none;
-    }
-
-    /* ── Events panel (footer-centered subtitle bar) ───────────────────── */
-    #events-panel {
-      position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
-      z-index: 1105;
-      width: min(96%, 640px); max-width: 920px; height: auto; max-height: 180px;
-      background: rgba(8,8,12,0.92);
-      border: 1px solid rgba(137,180,250,0.10);
-      border-radius: 12px; backdrop-filter: blur(6px);
-      display: flex; flex-direction: column; align-items: stretch; overflow: hidden;
-      padding: 8px 12px; gap: 8px;
-      box-shadow: 0 6px 20px rgba(0,0,0,0.45);
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial;
-    }
-    #events-panel.collapsed {
-      max-height: 46px;
-      padding-bottom: 0;
-    }
-    #events-panel.collapsed #events-list {
       display: none;
     }
-    #events-hdr {
-      display: flex; align-items: center; justify-content: space-between; gap: 10px;
-      flex-shrink: 0; color: #89b4fa; font-weight: 700; font-size: 15px;
-      white-space: nowrap; padding: 2px 4px;
-      cursor: pointer;
-    }
-    #ev-clear-btn {
-      background: none; border: none; color: #a6adc8;
-      cursor: pointer; font-size: 18px; padding: 4px 6px; line-height: 1;
-      margin-left: 10px;
-    }
-    #ev-clear-btn:hover { color: #f38ba8; }
+    #dbg.visible { display: block; }
+
+    /* ── Fire events log (drawer pane) ───────────────────────────────────── */
     #events-list {
-      overflow-y: auto; padding: 4px 6px; flex: 1; display: flex; flex-direction: column;
-      gap: 6px; max-height: calc(3 * 44px + 12px); /* show up to 3 items */
+      overflow-y: auto; padding: 4px 0; display: flex; flex-direction: column;
+      gap: 5px;
+    }
+    #events-list:empty::after {
+      content: "No events yet — run a simulation.";
+      color: #585b70; font-size: 10px; font-style: italic;
     }
     .ev {
-      display: flex; gap: 8px; align-items: center; padding: 8px 10px;
+      display: flex; gap: 7px; align-items: center; padding: 6px 8px;
       background: rgba(255,255,255,0.02); border-radius: 7px;
-      font-size: 15px; line-height: 1.05; color: #cdd6f4;
-      min-height: 44px; width: 100%; box-sizing: border-box;
+      font-size: 11.5px; line-height: 1.25; color: #cdd6f4;
+      width: 100%; box-sizing: border-box;
     }
-    .ev-t   { color: #84a0c6; flex-shrink: 0; min-width: 72px; font-size: 13px; }
-    .ev-icon{ flex-shrink: 0; font-size: 18px; }
+    .ev-t   { color: #84a0c6; flex-shrink: 0; font-size: 10px; }
+    .ev-icon{ flex-shrink: 0; font-size: 14px; }
     .ev-msg { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
     .ev-ignition    .ev-msg { color: #f38ba8; }
     .ev-danger      .ev-msg { color: #fab387; }
@@ -844,9 +888,28 @@
   </div>
 
   <!-- Control panel -->
-  <div id="panel">
-    <h1><span class="flame">🔥</span> WILSON Sandbox</h1>
+  <!-- Left icon rail -->
+  <div id="rail">
+    <div id="rail-logo" title="WILSON Sandbox">🔥</div>
+    <button class="rail-btn" id="rb-setup"     onclick="toggleDrawer('setup')"     title="Setup &amp; Weather">⛅<span class="rail-badge"></span></button>
+    <button class="rail-btn" id="rb-tools"     onclick="toggleDrawer('tools')"     title="Tools">🛠️<span class="rail-badge"></span></button>
+    <button class="rail-btn" id="rb-optimizer" onclick="toggleDrawer('optimizer')" title="Optimizer">🔬<span class="rail-badge"></span></button>
+    <button class="rail-btn" id="rb-hindcast"  onclick="toggleDrawer('hindcast')"  title="Hindcast Validation">📊<span class="rail-badge"></span></button>
+    <button class="rail-btn" id="rb-memory"    onclick="toggleDrawer('memory')"    title="Microclimate Memory">🧠<span class="rail-badge"></span></button>
+    <button class="rail-btn" id="rb-events"    onclick="toggleDrawer('events')"    title="Fire Events">📋<span class="rail-badge"></span></button>
+    <div class="rail-spacer"></div>
+    <button class="rail-btn" id="rb-dbg" onclick="toggleDbg()" title="Debug log (`)">🐞</button>
+  </div>
 
+  <!-- Drawer: one pane at a time -->
+  <div id="drawer">
+    <div id="drawer-header">
+      <span id="drawer-title">Setup &amp; Weather</span>
+      <button id="drawer-close" onclick="closeDrawer()" title="Close panel">✕</button>
+    </div>
+    <div id="drawer-body">
+
+    <div class="drawer-pane" id="pane-setup">
     <div class="sect-label">Weather</div>
     <div class="row">
       <label>Wind speed</label>
@@ -883,7 +946,9 @@
       <input type="time" id="ignition-time" value="14:00" />
       <span class="unit">UTC</span>
     </div>
+    </div><!-- /pane-setup -->
 
+    <div class="drawer-pane" id="pane-tools">
     <div class="sect-label">Tool</div>
     <div id="mode-toggle">
       <button id="btn-cursor"      class="active-cursor"  onclick="setMode('cursor')">👆 Cursor</button>
@@ -996,20 +1061,10 @@
     <div class="sect-label">Ignition Points (<span id="ign-count">0</span>)</div>
     <div id="ign-list">None yet — click the map in Ignite mode.</div>
 
-    <button class="btn" id="btn-run"    onclick="runSimulation()">▶ Run Simulation</button>
-    <button class="btn" id="btn-pause"  onclick="pauseSim()">⏸ Pause</button>
-    <button class="btn" id="btn-resume" onclick="resumeSim()">▶ Resume</button>
+    </div><!-- /pane-tools -->
 
-    <div class="speed-row">
-      <label>Speed</label>
-      <input type="range" id="speed-slider" min="1" max="10" step="1" value="1"
-             oninput="onSpeedChange(this.value)" />
-      <span class="speed-val" id="speed-val">1×</span>
-    </div>
-
-    <button class="btn" id="btn-clear" onclick="clearAll()">🗑 Clear All</button>
-
-    <div class="sect-label" style="margin-top:10px">🔬 Optimizer</div>
+    <div class="drawer-pane" id="pane-optimizer">
+    <div class="sect-label">🔬 Optimizer</div>
     <div style="font-size:10px;color:#585b70;margin-bottom:6px;line-height:1.4">
       Draw a 🎯 Mask (ground-truth perimeter), enter fire age, place 🔥 ignition points, then run.
     </div>
@@ -1068,7 +1123,56 @@
         ▶ Continue Simulation
       </button>
     </div>
+    </div><!-- /pane-optimizer -->
 
+    <div class="drawer-pane" id="pane-hindcast">
+    <div class="sect-label">📊 Hindcast Validation</div>
+    <div style="font-size:10px;color:#585b70;margin-bottom:8px;line-height:1.4">
+      Run historical fire optimization against real satellite data. Validates wind, fuel, and ignition parameters.
+    </div>
+    <div class="row">
+      <label>Fire Event</label>
+      <select id="hc-fire" style="width:140px;background:#1e1e2e;border:1px solid #313244;border-radius:5px;color:#cdd6f4;padding:3px 6px;outline:none">
+        <option value="Evoia 2021">Evoia 2021</option>
+        <option value="Rhodes 2023">Rhodes 2023</option>
+        <option value="Evros 2023">Evros 2023</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>Hindcast hours</label>
+      <input type="number" id="hc-hours" value="6" min="1" max="48" step="1" />
+      <span class="unit">h</span>
+    </div>
+    <div class="row">
+      <label>Max gens</label>
+      <input type="number" id="hc-maxiter" value="20" min="5" max="100" step="1" />
+    </div>
+    <div class="row">
+      <label>Pop size</label>
+      <input type="number" id="hc-popsize" value="12" min="5" max="50" step="1" />
+    </div>
+    <button class="btn" id="btn-run-hc" onclick="runHindcast()" style="background:#89dceb;color:#1e1e2e;margin-top:8px">📊 Run Hindcast</button>
+    <div id="hc-progress" style="display:none;margin-top:10px">
+      <div style="font-size:10px;color:#585b70;margin-bottom:4px">Progress:</div>
+      <div id="hc-msg" style="font-size:11px;color:#a6adc8;margin-bottom:3px">Starting...</div>
+      <div style="height:4px;background:#313244;border-radius:2px;overflow:hidden">
+        <div id="hc-bar" style="height:100%;background:linear-gradient(90deg,#89dceb,#89b4fa);width:0%;transition:width 0.3s"></div>
+      </div>
+    </div>
+    <div id="hc-result" style="display:none;margin-top:10px;padding:8px;background:#1e1e2e;border-radius:5px;border:1px solid #313244">
+      <div style="font-size:10px;color:#585b70;margin-bottom:4px">IoU Score:</div>
+      <div id="hc-iou" style="font-size:14px;color:#a6e3a1;font-weight:700">—</div>
+      <div id="hc-heatmaps" style="margin-top:6px;display:none">
+        <img id="hc-img-heat" style="width:100%;border-radius:3px;margin-bottom:4px" alt="Heatmap"/>
+        <img id="hc-img-overlay" style="width:100%;border-radius:3px" alt="Overlay"/>
+      </div>
+    </div>
+    </div><!-- /pane-hindcast -->
+
+    <div class="drawer-pane" id="pane-memory">
+    <div style="font-size:10px;color:#585b70;margin-top:10px;line-height:1.4">
+      Spatial fire memory builds up as simulations run and feeds the optimizer.
+    </div>
     <!-- Microclimate memory panel — shows after first simulation completes -->
     <div id="mc-panel">
       <div class="mc-title">🧠 Microclimate Memory</div>
@@ -1085,25 +1189,40 @@
       <div id="mc-opt-badge">✓ Optimizer will use this data on next run</div>
     </div>
 
-    <div id="status" class="info">Click the map to place ignition points.</div>
+    </div><!-- /pane-memory -->
+
+    <div class="drawer-pane" id="pane-events">
+      <div id="events-list"></div>
+      <button class="btn" onclick="clearEvents()" style="background:#313244;color:#a6adc8">✕ Clear Log</button>
+    </div><!-- /pane-events -->
+
+    </div><!-- /drawer-body -->
+    <div id="drawer-footer">
+      <div id="status" class="info">Click the map to place ignition points.</div>
+    </div>
+  </div><!-- /drawer -->
+
+  <!-- Transport pill: run controls, always visible -->
+  <div id="run-pill">
+    <button class="btn" id="btn-run"    onclick="runSimulation()">▶ Run</button>
+    <button class="btn" id="btn-pause"  onclick="pauseSim()">⏸ Pause</button>
+    <button class="btn" id="btn-resume" onclick="resumeSim()">▶ Resume</button>
+    <div class="speed-row">
+      <label>Speed</label>
+      <input type="range" id="speed-slider" min="1" max="10" step="1" value="1"
+             oninput="onSpeedChange(this.value)" />
+      <span class="speed-val" id="speed-val">1×</span>
+    </div>
     <div id="stats">
       <span>Step <b id="stat-step">—</b></span>
       <span>Active <b id="stat-active">—</b> ha</span>
       <span>Burned <b id="stat-burned">—</b> ha</span>
     </div>
+    <button class="btn" id="btn-clear" onclick="clearAll()" title="Clear everything">🗑</button>
   </div>
 
-  <!-- Debug overlay -->
+  <!-- Debug overlay (toggle with ` or the 🐞 rail button) -->
   <div id="dbg"></div>
-
-  <!-- Events panel -->
-  <div id="events-panel">
-    <div id="events-hdr" onclick="expandEventsPanel()">
-      <span>&#x1F4CB; Fire Events</span>
-      <button id="ev-clear-btn" onclick="toggleEventsPanel(event)" title="Minimize fire info">—</button>
-    </div>
-    <div id="events-list"></div>
-  </div>
 
   <script>
     // ── Debug ─────────────────────────────────────────────────────────────────
@@ -1140,7 +1259,7 @@
     var SRC_FIREBREAK_FILL = "firebreak-fill-src";
     var SRC_FIREBREAK_MARKERS = "firebreak-markers-src";
     var SRC_ENSEMBLE    = "ensemble-src";
-    var TILE_URL        = "https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}.jpg?api_key=42d95708-abc1-48a0-882c-c13e72274056";
+    var TILE_URL        = "https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}.jpg?api_key=8beb8c62-35d2-4d41-8e8c-f69eb43a9c3f";
     var WS_URL          = "ws://localhost:8765";
     var _activeMapTab   = "satellite";
 
@@ -1201,53 +1320,116 @@
       div.innerHTML = '<span class="ev-t">' + ts + '</span>' +
                       '<span class="ev-icon">' + icon + '</span>' +
                       '<span class="ev-msg">' + text + '</span>';
-      // Append new event and trim to max 3 visible entries
+      // Append new event and trim log
       list.appendChild(div);
-      // Keep only latest 3 events in DOM
-      while (list.children.length > 3) {
+      // Keep only latest 30 events in DOM
+      while (list.children.length > 30) {
         list.removeChild(list.firstChild);
         _evLog.shift();
       }
       // Auto-scroll to bottom (latest)
       list.scrollTop = list.scrollHeight;
+      // Unread badge on the rail while the events pane is closed
+      if (_activeDrawer !== 'events') {
+        _evUnread++;
+        _setRailBadge('events', true, _evUnread);
+      }
     }
 
     function clearEvents() {
       _evLog = [];
+      _evUnread = 0;
+      _setRailBadge('events', false);
       var list = document.getElementById('events-list');
       if (list) list.innerHTML = '';
     }
 
-    function _updateEventsPanelBtn() {
-      var btn = document.getElementById('ev-clear-btn');
-      var panel = document.getElementById('events-panel');
-      if (!btn || !panel) return;
-      var collapsed = panel.classList.contains('collapsed');
-      btn.textContent = collapsed ? '▾' : '—';
-      btn.title = collapsed ? 'Expand fire info' : 'Minimize fire info';
+    // ── Left rail drawer ──────────────────────────────────────────────────
+    var _activeDrawer = null;
+    var _evUnread     = 0;
+    var _drawerTitles = { setup: "Setup & Weather", tools: "Tools",
+                          optimizer: "Optimizer", hindcast: "Hindcast Validation",
+                          memory: "Microclimate Memory", events: "Fire Events" };
+
+    function openDrawer(name) {
+      if (!_drawerTitles[name]) return;
+      _activeDrawer = name;
+      document.getElementById("drawer").classList.add("open");
+      document.body.classList.add("drawer-open");
+      document.getElementById("drawer-title").textContent = _drawerTitles[name];
+      Object.keys(_drawerTitles).forEach(function (k) {
+        var pane = document.getElementById("pane-" + k);
+        if (pane) pane.classList.toggle("active", k === name);
+        var btn = document.getElementById("rb-" + k);
+        if (btn) btn.classList.toggle("active", k === name);
+      });
+      if (name === "events") _evUnread = 0;
+      _setRailBadge(name, false);
+      try { localStorage.setItem("wilson-drawer", name); } catch (e) {}
     }
 
-    function collapseEventsPanel() {
-      var panel = document.getElementById('events-panel');
-      if (!panel) return;
-      panel.classList.add('collapsed');
-      _updateEventsPanelBtn();
+    function closeDrawer() {
+      _activeDrawer = null;
+      document.getElementById("drawer").classList.remove("open");
+      document.body.classList.remove("drawer-open");
+      Object.keys(_drawerTitles).forEach(function (k) {
+        var btn = document.getElementById("rb-" + k);
+        if (btn) btn.classList.remove("active");
+      });
+      try { localStorage.setItem("wilson-drawer", ""); } catch (e) {}
     }
 
-    function expandEventsPanel() {
-      var panel = document.getElementById('events-panel');
-      if (!panel || !panel.classList.contains('collapsed')) return;
-      panel.classList.remove('collapsed');
-      _updateEventsPanelBtn();
+    function toggleDrawer(name) {
+      if (_activeDrawer === name) closeDrawer(); else openDrawer(name);
     }
 
-    function toggleEventsPanel(e) {
-      if (e && e.stopPropagation) e.stopPropagation();
-      var panel = document.getElementById('events-panel');
-      if (!panel) return;
-      panel.classList.toggle('collapsed');
-      _updateEventsPanelBtn();
+    function _setRailBadge(name, on, count) {
+      var btn = document.getElementById("rb-" + name);
+      if (!btn) return;
+      var badge = btn.querySelector(".rail-badge");
+      if (!badge) return;
+      badge.textContent = (on && count != null)
+        ? (count > 99 ? "99+" : String(count)) : "";
+      badge.classList.toggle("visible", !!on);
     }
+
+    function toggleDbg() {
+      var el = document.getElementById("dbg");
+      if (!el) return;
+      el.classList.toggle("visible");
+      var btn = document.getElementById("rb-dbg");
+      if (btn) btn.classList.toggle("active", el.classList.contains("visible"));
+    }
+
+    // Keyboard shortcuts: 1-6 tool modes, Space pause/resume, ` debug log
+    document.addEventListener("keydown", function (e) {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      var t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
+                t.tagName === "SELECT" || t.isContentEditable)) return;
+      var modes = { "1": "cursor", "2": "ignite", "3": "water",
+                    "4": "containment", "5": "mask", "6": "firebreak" };
+      if (modes[e.key]) {
+        if (typeof map !== "undefined" && map) setMode(modes[e.key]);
+        return;
+      }
+      if (e.key === " ") {
+        var p = document.getElementById("btn-pause");
+        var r = document.getElementById("btn-resume");
+        if (p && getComputedStyle(p).display !== "none")      { e.preventDefault(); pauseSim(); }
+        else if (r && getComputedStyle(r).display !== "none") { e.preventDefault(); resumeSim(); }
+        return;
+      }
+      if (e.key === "`") { e.preventDefault(); toggleDbg(); }
+    });
+
+    // Restore last-open drawer (default: setup on first visit)
+    (function () {
+      var saved = null;
+      try { saved = localStorage.getItem("wilson-drawer"); } catch (e) {}
+      if (saved === "") return;                       // user had closed it
+      openDrawer(_drawerTitles[saved] ? saved : "setup");
+    })();
     var ignitionPoints    = [];
     var waterDrops        = [];
     var _fireOverlayReady = false;
@@ -3552,6 +3734,7 @@
       var cp = document.getElementById("opt-continue");
       if (cp) {
         cp.style.display = "block";
+        if (_activeDrawer !== "optimizer") _setRailBadge("optimizer", true);
 
         // IoU quality warning
         var warn = document.getElementById("oc-iou-warn");
@@ -3588,6 +3771,7 @@
       var panel = document.getElementById("mc-panel");
       if (!panel) return;
       panel.style.display = "block";
+      if (_activeDrawer !== "memory") _setRailBadge("memory", true);
 
       document.getElementById("mc-runs-val").textContent = runs || 0;
 
@@ -4476,7 +4660,9 @@
     meshGoTo(0);
 
     if (data.meta) {
-      var airTag = (data.wind_grid && data.wind_grid.has_air) ? ' | air-corrected wind' : '';
+      var airTag = (data.wind_grid && data.wind_grid.has_air)
+        ? (' | air-corrected wind' + (data.wind_grid.has_fuel ? ' (real fuel map)' : ' (uniform fuel — CORINE unavailable)'))
+        : '';
       _dbg('Mesh: ' + data.meta.n_pts + ' pts | ' + (data.meta.n_mesh||'?') +
            ' mesh pts | VEX ' + data.meta.vex + 'x  dem=' +
            data.meta.dem_shape[0] + 'x' + data.meta.dem_shape[1] + airTag, '#a6adc8');
@@ -4521,16 +4707,18 @@
     var alenRef = span * 0.09;
 
     // 2D quiver (slide 0) and cone data (slides 1 & 2)
-    var ax = [], ay = [], cx = [], cy = [], cz1 = [], cz2 = [], nu = [], nv = [];
+    var ax = [], ay = [], cx = [], cy = [], cz1 = [], cz2 = [],
+        nu = [], nv = [], nw = [];
 
     // Offset cones above terrain surface so they're always visible
     var coneOffsetReal = alenRef * 0.06;          // ~6% of scene span in real metres
     var coneOffsetVex  = coneOffsetReal * (g.vex || 1);  // same offset in VEX space
 
     for (var i = 0; i < xs.length; i++) {
-      var ui, vi, alen;
+      var ui, vi, wi, alen;
       if (g.has_air && g.us && g.vs) {
         ui = g.us[i]; vi = g.vs[i];
+        wi = g.ws ? g.ws[i] : 0;   // air.py vertical component (up/downdraft)
         var mag = Math.sqrt(ui*ui + vi*vi) || 0.001;
         alen = alenRef * Math.min(mag / refSpd, 2.5);
         var scale2d = alen / mag;
@@ -4540,13 +4728,13 @@
         alen = alenRef * Math.min(speed / refSpd, 2.5);
         ax.push(xs[i], xs[i] + u_uni * alen, null);
         ay.push(ys[i], ys[i] + v_uni * alen, null);
-        ui = u_uni * speed; vi = v_uni * speed;
+        ui = u_uni * speed; vi = v_uni * speed; wi = 0;
       }
       cx.push(xs[i]); cy.push(ys[i]);
       // Place cone tails on terrain surface + small offset
       cz1.push((g.zs_real ? g.zs_real[i] : g.dem_mean) + coneOffsetReal);
       cz2.push((g.zs_vex  ? g.zs_vex[i]  : 0          ) + coneOffsetVex);
-      nu.push(ui); nv.push(vi);
+      nu.push(ui); nv.push(vi); nw.push(wi);
     }
 
     // 2D quiver: line segments + dot markers at arrow tips for arrowhead effect
@@ -4563,15 +4751,61 @@
         hoverinfo: 'none', showlegend: false, name: '__wind__' },
     ]);
 
-    var sizeref = span * 0.045;
-    var baseCone = {
-      type: 'cone', x: cx, y: cy, u: nu, v: nv, w: Array(cx.length).fill(0),
-      colorscale: [[0, '#89b4fa'], [1, '#89dceb']], showscale: false,
-      sizemode: 'absolute', sizeref: sizeref, anchor: 'tail',
+    // Slide 2 has an exaggerated z-axis (VEX): scale w so cone tilt matches
+    // the visual slope of the terrain in that space.
+    var vex   = g.vex || 1;
+    var nwVex = nw.map(function (w) { return w * vex; });
+
+    // A bare 'cone' trace has no shaft, so from most camera angles it reads
+    // as a blob rather than an arrow. Build real arrow glyphs instead: a
+    // thin 3D line for the shaft (length ∝ wind speed, like the 2D quiver)
+    // plus a small fixed-size cone at the tip for the arrowhead.
+    function buildQuiver3D(zTails, wComp) {
+      var headMax = alenRef * 0.22;
+      var shX = [], shY = [], shZ = [], hx = [], hy = [], hz = [], hu = [], hv = [], hw = [];
+      for (var i = 0; i < cx.length; i++) {
+        var ui = nu[i], vi = nv[i], wi = wComp[i];
+        var horizMag = Math.sqrt(ui * ui + vi * vi) || 0.001;
+        var alen = alenRef * Math.min(horizMag / refSpd, 2.5);
+        var mag3 = Math.sqrt(ui * ui + vi * vi + wi * wi) || 0.001;
+        var duX = ui / mag3, duY = vi / mag3, duZ = wi / mag3;
+        var headLen  = Math.min(headMax, alen * 0.6);
+        var shaftLen = Math.max(alen - headLen, 0);
+
+        var tx = cx[i], ty = cy[i], tz = zTails[i];
+        var sx = tx + duX * shaftLen, sy = ty + duY * shaftLen, sz = tz + duZ * shaftLen;
+
+        shX.push(tx, sx, null); shY.push(ty, sy, null); shZ.push(tz, sz, null);
+        hx.push(sx); hy.push(sy); hz.push(sz);
+        hu.push(duX * headLen); hv.push(duY * headLen); hw.push(duZ * headLen);
+      }
+      return { shX: shX, shY: shY, shZ: shZ, hx: hx, hy: hy, hz: hz, hu: hu, hv: hv, hw: hw };
+    }
+
+    var baseShaft = {
+      type: 'scatter3d', mode: 'lines',
+      line: { color: '#89dceb', width: 3 },
       hoverinfo: 'none', showlegend: false, name: '__wind__',
     };
-    Plotly.addTraces('mesh-plot-1', Object.assign({}, baseCone, { z: cz1 }));
-    Plotly.addTraces('mesh-plot-2', Object.assign({}, baseCone, { z: cz2 }));
+    var baseHead = {
+      type: 'cone', colorscale: [[0, '#89b4fa'], [1, '#89dceb']], showscale: false,
+      sizemode: 'scaled', sizeref: 0.24, anchor: 'tail',
+      hoverinfo: 'none', showlegend: false, name: '__wind__',
+    };
+
+    var q1 = buildQuiver3D(cz1, nw);
+    Plotly.addTraces('mesh-plot-1', [
+      Object.assign({}, baseShaft, { x: q1.shX, y: q1.shY, z: q1.shZ }),
+      Object.assign({}, baseHead,  { x: q1.hx,  y: q1.hy,  z: q1.hz,
+                                      u: q1.hu,  v: q1.hv,  w: q1.hw }),
+    ]);
+
+    var q2 = buildQuiver3D(cz2, nwVex);
+    Plotly.addTraces('mesh-plot-2', [
+      Object.assign({}, baseShaft, { x: q2.shX, y: q2.shY, z: q2.shZ }),
+      Object.assign({}, baseHead,  { x: q2.hx,  y: q2.hy,  z: q2.hz,
+                                      u: q2.hu,  v: q2.hv,  w: q2.hw }),
+    ]);
   }
 
   function _eraseWindArrows() {
@@ -4795,6 +5029,85 @@
     _add3dPin(point.lat, point.lng);
     openMeshPopup(point.lat, point.lng, e.clientX, e.clientY);
   }, { capture: true });
+
+  // ── Hindcast validation ──────────────────────────────────────────────────────
+  async function runHindcast() {
+    var btn = document.getElementById('btn-run-hc');
+    var prog = document.getElementById('hc-progress');
+    var result = document.getElementById('hc-result');
+    var msg = document.getElementById('hc-msg');
+    var bar = document.getElementById('hc-bar');
+
+    btn.disabled = true;
+    prog.style.display = 'block';
+    result.style.display = 'none';
+    msg.textContent = 'Starting hindcast...';
+    bar.style.width = '0%';
+
+    var fire = document.getElementById('hc-fire').value;
+    var hours = parseFloat(document.getElementById('hc-hours').value);
+    var maxiter = parseInt(document.getElementById('hc-maxiter').value);
+    var popsize = parseInt(document.getElementById('hc-popsize').value);
+
+    try {
+      // Connect to hindcast WebSocket session
+      var ws = new WebSocket('ws://127.0.0.1:8765');
+      var ready = false;
+
+      ws.onopen = function () {
+        ws.send(JSON.stringify({
+          type: 'init_hindcast',
+          fire_name: fire,
+          date_start: '',  // use preset
+          date_end: '',    // use preset
+          hindcast_hours: hours,
+          maxiter: maxiter,
+          popsize: popsize,
+          terrain_buf: 0.25
+        }));
+      };
+
+      ws.onmessage = function (ev) {
+        var data = JSON.parse(ev.data);
+        if (data.type === 'hindcast_progress') {
+          msg.textContent = data.message || '...';
+          bar.style.width = Math.max(0, Math.min(100, data.step * 14)) + '%';
+        } else if (data.type === 'hindcast_result') {
+          msg.textContent = 'Complete! IoU: ' + (data.best_iou || 0).toFixed(3);
+          bar.style.width = '100%';
+          document.getElementById('hc-iou').textContent = (data.best_iou || 0).toFixed(3);
+          if (data.heatmap_b64 || data.overlay_b64) {
+            var hms = document.getElementById('hc-heatmaps');
+            if (data.heatmap_b64) {
+              document.getElementById('hc-img-heat').src = 'data:image/png;base64,' + data.heatmap_b64;
+            }
+            if (data.overlay_b64) {
+              document.getElementById('hc-img-overlay').src = 'data:image/png;base64,' + data.overlay_b64;
+            }
+            hms.style.display = 'block';
+          }
+          result.style.display = 'block';
+          ws.close();
+        } else if (data.type === 'error') {
+          msg.textContent = 'Error: ' + (data.message || 'Unknown');
+          setTimeout(function () { prog.style.display = 'none'; }, 3000);
+          ws.close();
+        }
+      };
+
+      ws.onerror = function (err) {
+        msg.textContent = 'Connection error: ' + err;
+        btn.disabled = false;
+      };
+
+      ws.onclose = function () {
+        btn.disabled = false;
+      };
+    } catch (ex) {
+      msg.textContent = 'Error: ' + ex.message;
+      btn.disabled = false;
+    }
+  }
   </script>
 </body>
 </html>

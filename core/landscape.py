@@ -82,6 +82,105 @@ _CLC_SEQ_TO_3DIGIT = {
     42: 521, 43: 522, 44: 523,
 }
 
+# CLC 2018 rendered-legend colours (8-bit RGB), used for the PNG fallback
+# when the ArcGIS ImageServer integer-code GeoTIFF is unavailable. Each fuel
+# is mapped to its closest official EEA palette entry.
+_CLC_COLOR_PROFILES = {
+    "Aleppo_Pine":              [(0, 166, 0), (77, 255, 0), (204, 242, 77)],
+    "Black_Pine":               [(0, 128, 0)],
+    "Greek_Fir":                [(0, 100, 0)],
+    "Maritime_Pine":            [(0, 153, 51)],
+    "Oak_Forest":               [(128, 255, 0)],
+    "Chestnut_Forest":          [(96, 192, 0)],
+    "Beech_Forest":             [(64, 160, 0)],
+    "Maquis_Dense_Shrub":       [(166, 230, 77)],
+    "Tall_Maquis":              [(140, 210, 40)],
+    "Phrygana_Low_Scrub":       [(166, 242, 0)],
+    "Garrigue":                 [(204, 230, 77)],
+    "Dry_Grass":                [(230, 230, 0), (255, 255, 168)],
+    "Annual_Crops":             [(255, 255, 0), (255, 230, 77)],
+    "Abandoned_Agricultural":   [(166, 242, 128)],
+    "Olive_Grove":              [(230, 166, 0), (255, 230, 166)],
+    "Vineyard":                 [(230, 230, 77)],
+    "Eucalyptus":               [(0, 180, 60)],
+    "Riparian_Vegetation":      [(0, 200, 100)],
+    "Cypress":                  [(0, 120, 20)],
+    "Stone_Pine":               [(60, 190, 0)],
+    "Urban_Fabric":             [(230, 0, 77), (255, 0, 0), (255, 77, 77)],
+    "Urban_Road":               [(204, 204, 204), (153, 153, 153)],
+    "Water":                    [(0, 0, 230), (0, 204, 242), (166, 166, 230)],
+    "Non_Combustible":          [(166, 166, 166), (255, 255, 255)],
+}
+
+
+def decode_corine_tif(corine_file: str, fuel_names: list[str],
+                      tgt_rows: int, tgt_cols: int) -> np.ndarray:
+    """
+    Decode a CORINE Land Cover GeoTIFF (integer CLC class codes) into a
+    (tgt_rows, tgt_cols) fuel-type index array, row 0 = south.
+
+    Shared by ``Landscape.load_real_terrain`` (main simulation) and
+    ``mesh_api._load_real_fuel_map`` (3D terrain popup) so both consumers
+    of a CLC GeoTIFF decode it identically.
+    """
+    from rasterio.enums import Resampling as _Resampling
+
+    non_comb_idx = fuel_names.index("Non_Combustible")
+    with rasterio.open(corine_file) as clc_src:
+        clc_raw = clc_src.read(
+            1, out_shape=(tgt_rows, tgt_cols), resampling=_Resampling.nearest,
+        ).astype(np.int32)
+
+    # Auto-detect sequential (1–44) vs 3-digit (111–523) codes
+    unique_vals = np.unique(clc_raw[clc_raw > 0])
+    if len(unique_vals) > 0 and int(unique_vals.max()) <= 44:
+        vec_convert = np.vectorize(
+            lambda v: _CLC_SEQ_TO_3DIGIT.get(int(v), 0), otypes=[np.int32]
+        )
+        clc_codes = vec_convert(clc_raw)
+    else:
+        clc_codes = clc_raw
+
+    fuel_idx_grid = np.full(clc_codes.shape, non_comb_idx, dtype=int)
+    for code, fuel_name in CLC_TO_FUEL.items():
+        if fuel_name in fuel_names:
+            fuel_idx_grid[clc_codes == code] = fuel_names.index(fuel_name)
+
+    # rasterio reads GeoTIFFs with row-0 = north; flipud → row-0 = south
+    return np.flipud(fuel_idx_grid)
+
+
+def decode_corine_png(corine_file: str, fuel_names: list[str],
+                      tgt_rows: int, tgt_cols: int) -> np.ndarray:
+    """
+    Decode a rendered CORINE PNG export via nearest-RGB colour matching into
+    a (tgt_rows, tgt_cols) fuel-type index array, row 0 = south.
+
+    Fallback path used when the CLC integer-code GeoTIFF service is
+    unavailable (see ``pipeline.auto_fetcher.fetch_corine_land_cover``).
+    """
+    img = Image.open(corine_file).convert("RGB")
+    img_resized = img.resize((tgt_cols, tgt_rows), Image.NEAREST)
+    corine_data = np.flipud(np.array(img_resized))   # row-0 = south
+
+    pixels    = corine_data.reshape(-1, 3).astype(int)
+    best_idx  = np.zeros(pixels.shape[0], dtype=int)
+    min_dists = np.full(pixels.shape[0], np.inf)
+
+    for fuel_name, colors in _CLC_COLOR_PROFILES.items():
+        if fuel_name not in fuel_names:
+            continue
+        fidx = fuel_names.index(fuel_name)
+        for pr, pg, pb in colors:
+            dist = ((pixels[:, 0] - pr) ** 2 +
+                    (pixels[:, 1] - pg) ** 2 +
+                    (pixels[:, 2] - pb) ** 2)
+            mask = dist < min_dists
+            min_dists[mask] = dist[mask]
+            best_idx[mask]  = fidx
+
+    return best_idx.reshape(tgt_rows, tgt_cols)
+
 
 class Landscape:
     def __init__(self, config):
@@ -234,38 +333,11 @@ class Landscape:
         print(f"[Landscape] Decoding land cover from '{corine_file}' ...")
 
         corine_ext = str(corine_file).lower()
-        non_comb_idx = self.fuel_names.index("Non_Combustible")
 
         if corine_ext.endswith((".tif", ".tiff")):
-            # ── GeoTIFF path: direct integer CLC code lookup ──────────────────
-            # rasterio reads GeoTIFFs with row-0 = north; flipud → row-0 = south
-            # to match our DEM orientation.
             print("[Landscape]   Format: GeoTIFF (integer CLC codes) — direct lookup")
-            with rasterio.open(corine_file) as clc_src:
-                clc_raw = clc_src.read(
-                    1,
-                    out_shape=(tgt_rows, tgt_cols),
-                    resampling=_Resampling.nearest,
-                ).astype(np.int32)
-
-            # Auto-detect sequential (1–44) vs 3-digit (111–523) codes
-            unique_vals = np.unique(clc_raw[clc_raw > 0])
-            if len(unique_vals) > 0 and int(unique_vals.max()) <= 44:
-                print(f"[Landscape]   Sequential CLC codes detected (max={unique_vals.max()}) "
-                      "— converting to 3-digit")
-                vec_convert = np.vectorize(
-                    lambda v: _CLC_SEQ_TO_3DIGIT.get(int(v), 0), otypes=[np.int32]
-                )
-                clc_codes = vec_convert(clc_raw)
-            else:
-                clc_codes = clc_raw
-
-            fuel_idx_grid = np.full(clc_codes.shape, non_comb_idx, dtype=int)
-            for code, fuel_name in CLC_TO_FUEL.items():
-                if fuel_name in self.fuel_names:
-                    fuel_idx_grid[clc_codes == code] = self.fuel_names.index(fuel_name)
-
-            self.fuel_map = np.flipud(fuel_idx_grid)
+            self.fuel_map = decode_corine_tif(
+                corine_file, self.fuel_names, tgt_rows, tgt_cols)
 
             # Log class coverage
             unique_fuels, counts = np.unique(self.fuel_map, return_counts=True)
@@ -276,58 +348,9 @@ class Landscape:
                   ", ".join(f"{n} {c*100/total:.1f}%" for n, c in top))
 
         else:
-            # ── PNG path: nearest-RGB colour matching (fallback) ──────────────
             print("[Landscape]   Format: PNG (colour-matched) — nearest-RGB lookup")
-            img = Image.open(corine_file).convert("RGB")
-            img_resized = img.resize((tgt_cols, tgt_rows), Image.NEAREST)
-            corine_data = np.flipud(np.array(img_resized))
-
-            # CLC 2018 legend colours (8-bit RGB).  Each fuel mapped to its
-            # closest official EEA palette entry.
-            color_profiles = {
-                "Aleppo_Pine":              [(0, 166, 0), (77, 255, 0), (204, 242, 77)],
-                "Black_Pine":               [(0, 128, 0)],
-                "Greek_Fir":                [(0, 100, 0)],
-                "Maritime_Pine":            [(0, 153, 51)],
-                "Oak_Forest":               [(128, 255, 0)],
-                "Chestnut_Forest":          [(96, 192, 0)],
-                "Beech_Forest":             [(64, 160, 0)],
-                "Maquis_Dense_Shrub":       [(166, 230, 77)],
-                "Tall_Maquis":              [(140, 210, 40)],
-                "Phrygana_Low_Scrub":       [(166, 242, 0)],
-                "Garrigue":                 [(204, 230, 77)],
-                "Dry_Grass":                [(230, 230, 0), (255, 255, 168)],
-                "Annual_Crops":             [(255, 255, 0), (255, 230, 77)],
-                "Abandoned_Agricultural":   [(166, 242, 128)],
-                "Olive_Grove":              [(230, 166, 0), (255, 230, 166)],
-                "Vineyard":                 [(230, 230, 77)],
-                "Eucalyptus":               [(0, 180, 60)],
-                "Riparian_Vegetation":      [(0, 200, 100)],
-                "Cypress":                  [(0, 120, 20)],
-                "Stone_Pine":               [(60, 190, 0)],
-                "Urban_Fabric":             [(230, 0, 77), (255, 0, 0), (255, 77, 77)],
-                "Urban_Road":               [(204, 204, 204), (153, 153, 153)],
-                "Water":                    [(0, 0, 230), (0, 204, 242), (166, 166, 230)],
-                "Non_Combustible":          [(166, 166, 166), (255, 255, 255)],
-            }
-
-            pixels    = corine_data.reshape(-1, 3).astype(int)
-            best_idx  = np.zeros(pixels.shape[0], dtype=int)
-            min_dists = np.full(pixels.shape[0], np.inf)
-
-            for fuel_name, colors in color_profiles.items():
-                if fuel_name not in self.fuel_names:
-                    continue
-                fidx = self.fuel_names.index(fuel_name)
-                for pr, pg, pb in colors:
-                    dist = ((pixels[:, 0] - pr) ** 2 +
-                            (pixels[:, 1] - pg) ** 2 +
-                            (pixels[:, 2] - pb) ** 2)
-                    mask = dist < min_dists
-                    min_dists[mask] = dist[mask]
-                    best_idx[mask]  = fidx
-
-            self.fuel_map = best_idx.reshape(self.shape)
+            self.fuel_map = decode_corine_png(
+                corine_file, self.fuel_names, tgt_rows, tgt_cols)
 
         # 3. OSM overlay: rasterise roads and urban areas on top of the CLC map
         if osm_file:

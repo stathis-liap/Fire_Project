@@ -474,6 +474,18 @@ if __name__ == "__main__":
     fire_mesh.point_data["fire_rgba"] = _state_to_rgba(snapshots[0])
 
     # ── Wind arrows ────────────────────────────────────────────────────────────
+    # Vertical component from air.py (anabatic/katabatic + divergence
+    # compensation) so the 3D arrows tilt up windward slopes / down lee slopes.
+    try:
+        import types as _types
+        from air.air import compute_vertical_wind as _cvw
+        _shim = _types.SimpleNamespace(shape=elevation.shape, elevation=elevation)
+        ww = _cvw(_shim, wu.astype(np.float32), wv.astype(np.float32),
+                  cell_size_m=cell_size_m).astype(float)
+    except Exception as _exc:
+        print(f"[sim3d] vertical wind unavailable: {_exc}")
+        ww = np.zeros_like(elevation)
+
     q_step = max(1, min(rows, cols) // 20)
     qi = np.arange(0, rows, q_step)
     qj = np.arange(0, cols, q_step)
@@ -486,8 +498,10 @@ if __name__ == "__main__":
     ))
     q_u = wu[qI, qJ].ravel()
     q_v = wv[qI, qJ].ravel()
-    vec_dir = np.column_stack((q_u, q_v, np.zeros_like(q_u)))
-    vec_mag = np.linalg.norm(vec_dir[:, :2], axis=1) + 0.1
+    q_w = ww[qI, qJ].ravel()
+    # Scale w by Z_EXG so arrow tilt matches the exaggerated terrain
+    vec_dir = np.column_stack((q_u, q_v, q_w * Z_EXG))
+    vec_mag = np.linalg.norm(np.column_stack((q_u, q_v, q_w)), axis=1) + 0.1
 
     wind_cloud = pv.PolyData(vec_pts)
     wind_cloud["wind_vectors"]   = vec_dir
