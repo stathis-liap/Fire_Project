@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Project WILSON — Sandbox</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>" />
+  <link rel="icon" type="image/png" href="assets/icons/flame.png" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.css" />
   <script src="https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.js"></script>
   <!-- D. Plotly.js for interactive 3D mesh carousel -->
@@ -17,6 +17,17 @@
       font-family: 'Segoe UI', system-ui, sans-serif;
     }
     #map { position: absolute; inset: 0; }
+
+    /* ── Icon images (replace emoji glyphs) ──────────────────────────────── */
+    .icon {
+      width: 1em; height: 1em;
+      vertical-align: -0.15em;
+      display: inline-block;
+      object-fit: contain;
+      flex-shrink: 0;
+    }
+    .rail-btn .icon { width: 17px; height: 17px; vertical-align: -3px; }
+    #rail-logo .icon { width: 22px; height: 22px; }
 
     /* ── Canvas overlays ─────────────────────────────────────────────────── */
     #atmo-overlay {
@@ -781,7 +792,7 @@
 
   <!-- Rect analysis panel (shown after Shift+drag in cursor mode) -->
   <div id="rect-analysis">
-    <h4>Area Analysis <button onclick="closeRectAnalysis()" title="Close">✕</button></h4>
+    <h4>Area Analysis <button onclick="closeRectAnalysis()" title="Close"><img class='icon' src='assets/icons/x.png' alt=''></button></h4>
     <div id="rect-analysis-content">
       <div class="ce-hint">Shift+drag in Cursor mode to select an area</div>
     </div>
@@ -791,9 +802,9 @@
   <!-- Fire Info Window — draggable cell analysis panel -->
   <div id="fire-info-window">
     <div id="fire-info-header">
-      <span class="fi-title">🔥 Cell Analysis</span>
+      <span class="fi-title"><img class='icon' src='assets/icons/flame.png' alt=''> Cell Analysis</span>
       <div class="fi-btns">
-        <button onclick="closeFireInfoWindow()" title="Close">✕</button>
+        <button onclick="closeFireInfoWindow()" title="Close"><img class='icon' src='assets/icons/x.png' alt=''></button>
       </div>
     </div>
     <div id="fire-info-body">
@@ -803,10 +814,10 @@
 
   <!-- Map view tabs -->
   <div id="map-tabs">
-    <button class="map-tab active" id="tab-satellite"  onclick="setMapTab('satellite')">🛰 Satellite</button>
-    <button class="map-tab"        id="tab-vegetation" onclick="setMapTab('vegetation')">🌿 Vegetation</button>
+    <button class="map-tab active" id="tab-satellite"  onclick="setMapTab('satellite')"><img class='icon' src='assets/icons/satellite.png' alt=''> Satellite</button>
+    <button class="map-tab"        id="tab-vegetation" onclick="setMapTab('vegetation')"><img class='icon' src='assets/icons/leaf.png' alt=''> Vegetation</button>
     <button class="map-tab"        id="tab-3d-view"    onclick="request3DView()"
-            title="Launch 3D terrain view (start a simulation first)">🧊 3D View</button>
+            title="Launch 3D terrain view (start a simulation first)"><img class='icon' src='assets/icons/box.png' alt=''> 3D View</button>
   </div>
 
   <!-- Vegetation legend (shown when vegetation tab is active) -->
@@ -816,10 +827,10 @@
   <div id="weather-strip">
     <span id="ws-time">T+00:00</span>
     <span id="ws-wallclock"></span>
-    <span>💨 <b id="ws-wind">—</b> m/s</span>
-    <span id="ws-arrow">↑</span>
-    <span>🌡 <b id="ws-temp">—</b>°C</span>
-    <span>💧 <b id="ws-rh">—</b>%</span>
+    <span><img class='icon' src='assets/icons/wind.png' alt=''> <b id="ws-wind">—</b> m/s</span>
+    <span id="ws-arrow"><img class='icon' src='assets/icons/arrow-up.png' alt=''></span>
+    <span><img class='icon' src='assets/icons/thermometer.png' alt=''> <b id="ws-temp">—</b>°C</span>
+    <span><img class='icon' src='assets/icons/droplet.png' alt=''> <b id="ws-rh">—</b>%</span>
   </div>
 
   <!-- Risk panel -->
@@ -871,17 +882,17 @@
   </div>
 
   <!-- Floating action buttons -->
-  <button class="fab" id="risk-toggle" onclick="toggleRiskPanel()">⚡ Risk</button>
-  <button class="fab" id="btn-wind"    onclick="toggleWind()">💨 Wind</button>
-  <button class="fab" id="btn-mute"    onclick="toggleMute()">🔊</button>
+  <button class="fab" id="risk-toggle" onclick="toggleRiskPanel()"><img class='icon' src='assets/icons/zap.png' alt=''> Risk</button>
+  <button class="fab" id="btn-wind"    onclick="toggleWind()"><img class='icon' src='assets/icons/wind.png' alt=''> Wind</button>
+  <button class="fab" id="btn-mute"    onclick="toggleMute()"><img class='icon' src='assets/icons/volume-2.png' alt=''></button>
 
   <!-- Timeline bar -->
   <div id="timeline-bar">
     <div id="tl-stats">
       <span>⏱ <b id="tl-elapsed">T+00:00</b></span>
-      <span>🕐 <b id="tl-wallclock">—</b></span>
-      <span>🔥 Active <b id="tl-active">—</b> ha</span>
-      <span>🖤 Burned <b id="tl-burned">—</b> ha</span>
+      <span><img class='icon' src='assets/icons/clock.png' alt=''> <b id="tl-wallclock">—</b></span>
+      <span><img class='icon' src='assets/icons/flame.png' alt=''> Active <b id="tl-active">—</b> ha</span>
+      <span><img class='icon' src='assets/icons/ash.png' alt=''> Burned <b id="tl-burned">—</b> ha</span>
     </div>
     <input type="range" id="scrubber" min="0" max="0" value="0" oninput="onScrub(this.value)"/>
     <div id="tl-days"></div>
@@ -890,22 +901,22 @@
   <!-- Control panel -->
   <!-- Left icon rail -->
   <div id="rail">
-    <div id="rail-logo" title="WILSON Sandbox">🔥</div>
-    <button class="rail-btn" id="rb-setup"     onclick="toggleDrawer('setup')"     title="Setup &amp; Weather">⛅<span class="rail-badge"></span></button>
-    <button class="rail-btn" id="rb-tools"     onclick="toggleDrawer('tools')"     title="Tools">🛠️<span class="rail-badge"></span></button>
-    <button class="rail-btn" id="rb-optimizer" onclick="toggleDrawer('optimizer')" title="Optimizer">🔬<span class="rail-badge"></span></button>
-    <button class="rail-btn" id="rb-hindcast"  onclick="toggleDrawer('hindcast')"  title="Hindcast Validation">📊<span class="rail-badge"></span></button>
-    <button class="rail-btn" id="rb-memory"    onclick="toggleDrawer('memory')"    title="Microclimate Memory">🧠<span class="rail-badge"></span></button>
-    <button class="rail-btn" id="rb-events"    onclick="toggleDrawer('events')"    title="Fire Events">📋<span class="rail-badge"></span></button>
+    <div id="rail-logo" title="WILSON Sandbox"><img class='icon' src='assets/icons/flame.png' alt=''></div>
+    <button class="rail-btn" id="rb-setup"     onclick="toggleDrawer('setup')"     title="Setup &amp; Weather"><img class='icon' src='assets/icons/cloud-sun.png' alt=''><span class="rail-badge"></span></button>
+    <button class="rail-btn" id="rb-tools"     onclick="toggleDrawer('tools')"     title="Tools"><img class='icon' src='assets/icons/wrench.png' alt=''><span class="rail-badge"></span></button>
+    <button class="rail-btn" id="rb-optimizer" onclick="toggleDrawer('optimizer')" title="Optimizer"><img class='icon' src='assets/icons/flask.png' alt=''><span class="rail-badge"></span></button>
+    <button class="rail-btn" id="rb-hindcast"  onclick="toggleDrawer('hindcast')"  title="Hindcast Validation"><img class='icon' src='assets/icons/bar-chart.png' alt=''><span class="rail-badge"></span></button>
+    <button class="rail-btn" id="rb-memory"    onclick="toggleDrawer('memory')"    title="Microclimate Memory"><img class='icon' src='assets/icons/brain.png' alt=''><span class="rail-badge"></span></button>
+    <button class="rail-btn" id="rb-events"    onclick="toggleDrawer('events')"    title="Fire Events"><img class='icon' src='assets/icons/clipboard-list.png' alt=''><span class="rail-badge"></span></button>
     <div class="rail-spacer"></div>
-    <button class="rail-btn" id="rb-dbg" onclick="toggleDbg()" title="Debug log (`)">🐞</button>
+    <button class="rail-btn" id="rb-dbg" onclick="toggleDbg()" title="Debug log (`)"><img class='icon' src='assets/icons/bug.png' alt=''></button>
   </div>
 
   <!-- Drawer: one pane at a time -->
   <div id="drawer">
     <div id="drawer-header">
       <span id="drawer-title">Setup &amp; Weather</span>
-      <button id="drawer-close" onclick="closeDrawer()" title="Close panel">✕</button>
+      <button id="drawer-close" onclick="closeDrawer()" title="Close panel"><img class='icon' src='assets/icons/x.png' alt=''></button>
     </div>
     <div id="drawer-body">
 
@@ -951,16 +962,16 @@
     <div class="drawer-pane" id="pane-tools">
     <div class="sect-label">Tool</div>
     <div id="mode-toggle">
-      <button id="btn-cursor"      class="active-cursor"  onclick="setMode('cursor')">👆 Cursor</button>
-      <button id="btn-ignite"                             onclick="setMode('ignite')">🔥 Ignite</button>
-      <button id="btn-water"                              onclick="setMode('water')">💧 Water</button>
-      <button id="btn-containment"                        onclick="setMode('containment')">🚒 Contain</button>
-      <button id="btn-mask"                               onclick="setMode('mask')">🎯 Mask</button>
-      <button id="btn-firebreak"                          onclick="setMode('firebreak')">🪓 Firebreak</button>
+      <button id="btn-cursor"      class="active-cursor"  onclick="setMode('cursor')"><img class='icon' src='assets/icons/pointer.png' alt=''> Cursor</button>
+      <button id="btn-ignite"                             onclick="setMode('ignite')"><img class='icon' src='assets/icons/flame.png' alt=''> Ignite</button>
+      <button id="btn-water"                              onclick="setMode('water')"><img class='icon' src='assets/icons/droplet.png' alt=''> Water</button>
+      <button id="btn-containment"                        onclick="setMode('containment')"><img class='icon' src='assets/icons/truck.png' alt=''> Contain</button>
+      <button id="btn-mask"                               onclick="setMode('mask')"><img class='icon' src='assets/icons/target.png' alt=''> Mask</button>
+      <button id="btn-firebreak"                          onclick="setMode('firebreak')"><img class='icon' src='assets/icons/axe.png' alt=''> Firebreak</button>
     </div>
     <button class="btn" id="btn-apply-containment" onclick="applyContainmentLine()" style="background:#f9e2af;color:#1e1e2e;display:none">Deploy Containment Line</button>
-    <button class="btn" id="btn-close-mask"        onclick="closeMaskPolygon()">✔ Close Polygon</button>
-    <button class="btn" id="btn-clear-mask"        onclick="clearMask()">✕ Clear Mask</button>
+    <button class="btn" id="btn-close-mask"        onclick="closeMaskPolygon()"><img class='icon' src='assets/icons/check.png' alt=''> Close Polygon</button>
+    <button class="btn" id="btn-clear-mask"        onclick="clearMask()"><img class='icon' src='assets/icons/x.png' alt=''> Clear Mask</button>
 
     <!-- Water brush controls (shown when mode=water) -->
     <div id="brush-controls">
@@ -1029,22 +1040,22 @@
     <div id="firebreak-controls">
       <div class="firebreak-header">
         <div class="sect-label">Firebreak</div>
-        <button class="btn btn-small" onclick="startFirebreakDesign()">➕ New Zone</button>
+        <button class="btn btn-small" onclick="startFirebreakDesign()"><img class='icon' src='assets/icons/plus.png' alt=''> New Zone</button>
       </div>
       <div class="fb-row">
-        <button class="btn btn-small" id="btn-firebreak-design" onclick="startFirebreakDesign()">🛠 Design</button>
-        <button class="btn btn-small" id="btn-firebreak-apply" onclick="applyFirebreak()">🚧 Apply</button>
+        <button class="btn btn-small" id="btn-firebreak-design" onclick="startFirebreakDesign()"><img class='icon' src='assets/icons/wrench.png' alt=''> Design</button>
+        <button class="btn btn-small" id="btn-firebreak-apply" onclick="applyFirebreak()"><img class='icon' src='assets/icons/check-circle.png' alt=''> Apply</button>
       </div>
       <div class="fb-row">
-        <button class="btn btn-small" id="btn-firebreak-save" onclick="saveFirebreak()">💾 Save</button>
-        <button class="btn btn-small" id="btn-firebreak-load" onclick="loadFirebreak()">📂 Load</button>
+        <button class="btn btn-small" id="btn-firebreak-save" onclick="saveFirebreak()"><img class='icon' src='assets/icons/save.png' alt=''> Save</button>
+        <button class="btn btn-small" id="btn-firebreak-load" onclick="loadFirebreak()"><img class='icon' src='assets/icons/folder-open.png' alt=''> Load</button>
       </div>
       <div class="fb-row">
-        <button class="btn btn-small" id="btn-firebreak-undo" onclick="undoFirebreak()">↩ Undo</button>
-        <button class="btn btn-small" id="btn-firebreak-redo" onclick="redoFirebreak()">↪ Redo</button>
+        <button class="btn btn-small" id="btn-firebreak-undo" onclick="undoFirebreak()"><img class='icon' src='assets/icons/corner-up-left.png' alt=''> Undo</button>
+        <button class="btn btn-small" id="btn-firebreak-redo" onclick="redoFirebreak()"><img class='icon' src='assets/icons/corner-up-right.png' alt=''> Redo</button>
       </div>
       <div class="fb-row">
-        <button class="btn btn-small" id="btn-firebreak-clear-all" onclick="clearFirebreakZones()">✕ Clear</button>
+        <button class="btn btn-small" id="btn-firebreak-clear-all" onclick="clearFirebreakZones()"><img class='icon' src='assets/icons/x.png' alt=''> Clear</button>
         <div class="ctrl-row" style="margin:0;">
           <label for="firebreak-color">Color</label>
           <input type="color" id="firebreak-color" value="#cba6f7" onchange="setFirebreakColor(this.value)">
@@ -1064,9 +1075,9 @@
     </div><!-- /pane-tools -->
 
     <div class="drawer-pane" id="pane-optimizer">
-    <div class="sect-label">🔬 Optimizer</div>
+    <div class="sect-label"><img class='icon' src='assets/icons/flask.png' alt=''> Optimizer</div>
     <div style="font-size:10px;color:#585b70;margin-bottom:6px;line-height:1.4">
-      Draw a 🎯 Mask (ground-truth perimeter), enter fire age, place 🔥 ignition points, then run.
+      Draw a <img class='icon' src='assets/icons/target.png' alt=''> Mask (ground-truth perimeter), enter fire age, place <img class='icon' src='assets/icons/flame.png' alt=''> ignition points, then run.
     </div>
     <div class="opt-row" id="opt-elapsed-row" style="display:none">
       <label>Fire age at mask</label>
@@ -1083,27 +1094,27 @@
       <label>Iterations</label>
       <input type="number" id="opt-iterations" value="12" min="3" max="50" step="1"/>
     </div>
-    <button class="btn" id="btn-run-opt" onclick="runOptimizer()" disabled>🔬 Run Optimizer</button>
+    <button class="btn" id="btn-run-opt" onclick="runOptimizer()" disabled><img class='icon' src='assets/icons/flask.png' alt=''> Run Optimizer</button>
     <div id="opt-result-box"></div>
 
     <!-- Continue-from-optimizer panel — shown after optimizer completes -->
     <div id="opt-continue">
-      <div class="oc-title">▶ Continue Simulation</div>
+      <div class="oc-title"><img class='icon' src='assets/icons/play.png' alt=''> Continue Simulation</div>
 
       <!-- Mode selector -->
       <div style="display:flex;gap:3px;margin-bottom:5px">
         <button id="oc-btn-gt" class="oc-mode-btn active"
-                onclick="setOcMode('ground_truth')">🎯 Ground Truth</button>
+                onclick="setOcMode('ground_truth')"><img class='icon' src='assets/icons/target.png' alt=''> Ground Truth</button>
         <button id="oc-btn-bs" class="oc-mode-btn"
-                onclick="setOcMode('best_params_sim')">🔬 Best IoU Sim</button>
+                onclick="setOcMode('best_params_sim')"><img class='icon' src='assets/icons/flask.png' alt=''> Best IoU Sim</button>
       </div>
       <div id="oc-gt-desc" class="oc-desc">
-        Polygon edges → burning. Interior → already burned. Fire continues outward.
+        Polygon edges <img class='icon' src='assets/icons/arrow-right.png' alt=''> burning. Interior <img class='icon' src='assets/icons/arrow-right.png' alt=''> already burned. Fire continues outward.
       </div>
       <div id="oc-bs-desc" class="oc-desc" style="display:none">
         Runs with optimizer parameters for the fire age you set, then continues.
       </div>
-      <div id="oc-gt-missing">⚠ No ground-truth mask drawn. Switch to Mask mode and close a polygon first.</div>
+      <div id="oc-gt-missing"><img class='icon' src='assets/icons/alert-triangle.png' alt=''> No ground-truth mask drawn. Switch to Mask mode and close a polygon first.</div>
 
       <!-- Toggles -->
       <div class="oc-check-row">
@@ -1120,13 +1131,13 @@
 
       <button class="btn" id="oc-btn-start" onclick="startOptimizerContinueSim()"
               style="background:#a6e3a1;color:#1e1e2e;margin-top:3px">
-        ▶ Continue Simulation
+        <img class='icon' src='assets/icons/play.png' alt=''> Continue Simulation
       </button>
     </div>
     </div><!-- /pane-optimizer -->
 
     <div class="drawer-pane" id="pane-hindcast">
-    <div class="sect-label">📊 Hindcast Validation</div>
+    <div class="sect-label"><img class='icon' src='assets/icons/bar-chart.png' alt=''> Hindcast Validation</div>
     <div style="font-size:10px;color:#585b70;margin-bottom:8px;line-height:1.4">
       Run historical fire optimization against real satellite data. Validates wind, fuel, and ignition parameters.
     </div>
@@ -1151,7 +1162,7 @@
       <label>Pop size</label>
       <input type="number" id="hc-popsize" value="12" min="5" max="50" step="1" />
     </div>
-    <button class="btn" id="btn-run-hc" onclick="runHindcast()" style="background:#89dceb;color:#1e1e2e;margin-top:8px">📊 Run Hindcast</button>
+    <button class="btn" id="btn-run-hc" onclick="runHindcast()" style="background:#89dceb;color:#1e1e2e;margin-top:8px"><img class='icon' src='assets/icons/bar-chart.png' alt=''> Run Hindcast</button>
     <div id="hc-progress" style="display:none;margin-top:10px">
       <div style="font-size:10px;color:#585b70;margin-bottom:4px">Progress:</div>
       <div id="hc-msg" style="font-size:11px;color:#a6adc8;margin-bottom:3px">Starting...</div>
@@ -1175,7 +1186,7 @@
     </div>
     <!-- Microclimate memory panel — shows after first simulation completes -->
     <div id="mc-panel">
-      <div class="mc-title">🧠 Microclimate Memory</div>
+      <div class="mc-title"><img class='icon' src='assets/icons/brain.png' alt=''> Microclimate Memory</div>
       <div class="mc-row">
         <span>Simulation runs</span>
         <b id="mc-runs-val">0</b>
@@ -1186,14 +1197,14 @@
         Wind ×<b id="mc-wind-val">—</b>
       </div>
       <div id="mc-no-data">Run a simulation to build spatial fire memory.</div>
-      <div id="mc-opt-badge">✓ Optimizer will use this data on next run</div>
+      <div id="mc-opt-badge"><img class='icon' src='assets/icons/check.png' alt=''> Optimizer will use this data on next run</div>
     </div>
 
     </div><!-- /pane-memory -->
 
     <div class="drawer-pane" id="pane-events">
       <div id="events-list"></div>
-      <button class="btn" onclick="clearEvents()" style="background:#313244;color:#a6adc8">✕ Clear Log</button>
+      <button class="btn" onclick="clearEvents()" style="background:#313244;color:#a6adc8"><img class='icon' src='assets/icons/x.png' alt=''> Clear Log</button>
     </div><!-- /pane-events -->
 
     </div><!-- /drawer-body -->
@@ -1204,9 +1215,9 @@
 
   <!-- Transport pill: run controls, always visible -->
   <div id="run-pill">
-    <button class="btn" id="btn-run"    onclick="runSimulation()">▶ Run</button>
+    <button class="btn" id="btn-run"    onclick="runSimulation()"><img class='icon' src='assets/icons/play.png' alt=''> Run</button>
     <button class="btn" id="btn-pause"  onclick="pauseSim()">⏸ Pause</button>
-    <button class="btn" id="btn-resume" onclick="resumeSim()">▶ Resume</button>
+    <button class="btn" id="btn-resume" onclick="resumeSim()"><img class='icon' src='assets/icons/play.png' alt=''> Resume</button>
     <div class="speed-row">
       <label>Speed</label>
       <input type="range" id="speed-slider" min="1" max="10" step="1" value="1"
@@ -1218,10 +1229,10 @@
       <span>Active <b id="stat-active">—</b> ha</span>
       <span>Burned <b id="stat-burned">—</b> ha</span>
     </div>
-    <button class="btn" id="btn-clear" onclick="clearAll()" title="Clear everything">🗑</button>
+    <button class="btn" id="btn-clear" onclick="clearAll()" title="Clear everything"><img class='icon' src='assets/icons/trash-2.png' alt=''></button>
   </div>
 
-  <!-- Debug overlay (toggle with ` or the 🐞 rail button) -->
+  <!-- Debug overlay (toggle with ` or the <img class='icon' src='assets/icons/bug.png' alt=''> rail button) -->
   <div id="dbg"></div>
 
   <script>
@@ -1555,6 +1566,11 @@
     var SRC_RECT_SEL    = "rect-sel-src";
 
     function _setupMapLayers() {
+      ["truck", "map-pin"].forEach(function (name) {
+        map.loadImage("assets/icons/" + name + ".png", function (err, image) {
+          if (!err && !map.hasImage(name)) map.addImage(name, image);
+        });
+      });
       map.addSource(SRC_IGNITE,     { type: "geojson", data: emptyFC() });
       map.addSource(SRC_WATER,      { type: "geojson", data: emptyFC() });
       map.addSource(SRC_CONTAINMENT,{ type: "geojson", data: emptyFC() });
@@ -1575,18 +1591,18 @@
           "line-dasharray": [4, 3],
         },
       });
-      // Containment markers layer (truck emoji text)
+      // Containment markers layer (truck / pin icon-images)
       map.addLayer({
         id: "containment-markers", type: "symbol", source: SRC_CONTAINMENT_MARKERS,
         layout: {
-          "text-field":          ["get", "icon"],
-          "text-size":           14,
-          "text-anchor":         "center",
-          "text-allow-overlap":  true,
+          "icon-image":          ["get", "icon"],
+          "icon-size":           0.4,
+          "icon-anchor":         "center",
+          "icon-allow-overlap":  true,
           "symbol-placement":    "point",
         },
         paint: {
-          "text-opacity": ["get", "opacity"],
+          "icon-opacity": ["get", "opacity"],
         },
       });
       map.addLayer({
@@ -1730,7 +1746,7 @@
     function _set3DButtonState(running) {
       var btn = document.getElementById("tab-3d-view");
       if (!btn) return;
-      btn.textContent = "🧊 3D View";
+      btn.innerHTML = "<img class='icon' src='assets/icons/box.png' alt=''> 3D View";
       if (running) btn.classList.add("sim3d-live");
       else         btn.classList.remove("sim3d-live");
     }
@@ -2261,7 +2277,9 @@
 
     function toggleMute() {
       _muted = !_muted;
-      document.getElementById("btn-mute").textContent = _muted ? "🔇" : "🔊";
+      document.getElementById("btn-mute").innerHTML = _muted
+        ? "<img class='icon' src='assets/icons/volume-x.png' alt=''>"
+        : "<img class='icon' src='assets/icons/volume-2.png' alt=''>";
       if (_muted && _audioCtx) {
         _audioCtx.suspend();
       } else if (!_muted && _audioCtx && _audioCtx.state === "suspended") {
@@ -2448,7 +2466,7 @@
           markerFeatures.push({
             type: "Feature",
             geometry: { type: "Point", coordinates: line.points[i] },
-            properties: { icon: "🚒", opacity: opacity },
+            properties: { icon: "truck", opacity: opacity },
           });
         }
       });
@@ -2464,7 +2482,7 @@
           markerFeatures.push({
             type: "Feature",
             geometry: { type: "Point", coordinates: pt },
-            properties: { icon: "📍", opacity: 0.8 },
+            properties: { icon: "map-pin", opacity: 0.8 },
           });
         });
       }
@@ -2613,7 +2631,7 @@
         return '<div style="display:flex;gap:6px">'
              + '<button type="button" class="fb-zone-btn' + activeClass + '" title="Right-click to rename" onclick="selectFirebreakZone(' + zone.id + ')" oncontextmenu="renameFirebreakZone(event,' + zone.id + ')">'
              + zone.label + ' (' + zone.points.length + ')</button>'
-             + '<button class="btn-small" onclick="toggleZoneClosed(' + zone.id + ')">' + (zone.closed ? '🔒' : '◻︎') + '</button>'
+             + '<button class="btn-small" onclick="toggleZoneClosed(' + zone.id + ')">' + (zone.closed ? "<img class='icon' src='assets/icons/lock.png' alt=''>" : "<img class='icon' src='assets/icons/unlock.png' alt=''>") + '</button>'
              + '</div>';
       }).join("");
       document.getElementById("firebreak-zone-list").innerHTML = list || '<div class="fb-empty">No zones yet.</div>';
@@ -3064,7 +3082,7 @@
       html += '<div class="ra-row"><b>Fuel:</b> ' + (s.dominant_fuel || "—").replace(/_/g, " ") + '</div>';
       html += '<div class="ra-row"><b>Avg elevation:</b> ' + (s.avg_elevation || 0).toFixed(0) + ' m</div>';
       html += '<div class="ra-row"><b>Avg moisture:</b> ' + (((s.avg_moisture || 0)*100).toFixed(1)) + '%</div>';
-      html += '<div class="ra-row"><b>Wind:</b> ' + (s.wind_speed_ms || 0).toFixed(1) + ' m/s → ' +
+      html += '<div class="ra-row"><b>Wind:</b> ' + (s.wind_speed_ms || 0).toFixed(1) + " m/s <img class='icon' src='assets/icons/arrow-right.png' alt=''> " +
               ['N','NE','E','SE','S','SW','W','NW'][Math.round((s.wind_dir_deg||0)/45)%8] + '</div>';
       html += '<div class="ra-row"><b>Dominant spread:</b> ' + (s.dominant_spread_dir || "—") + '</div>';
       if ((s.avg_water || 0) > 0.01)
@@ -3074,7 +3092,7 @@
 
       if (mc && mc.learned) {
         html += '<hr class="ra-divider">';
-        html += '<div class="ra-mc"><b>🧠 Microclimate (' + mc.runs + ' runs):</b><br>';
+        html += '<div class="ra-mc"><b><img class="icon" src="assets/icons/brain.png" alt=""> Microclimate (' + mc.runs + ' runs):</b><br>';
         html += 'Ignition freq: <b>' + ((mc.avg_ignition_freq||0)*100).toFixed(0) + '%</b> · ';
         html += 'ROS factor: <b>×' + (mc.avg_ros_factor||1).toFixed(2) + '</b></div>';
       }
@@ -3173,7 +3191,7 @@
         var ev = msg.environment;
         var bear = _windBearingLabel(ev.wind_direction_deg || 0);
         html += '<div class="ce-row"><b>Wind:</b> ' + (ev.wind_speed_ms || 0).toFixed(1) +
-                " m/s → " + bear + "</div>";
+                " m/s <img class='icon' src='assets/icons/arrow-right.png' alt=''> " + bear + "</div>";
         html += '<div class="ce-row"><b>Slope:</b> ' +
                 (ev.slope_degrees || 0).toFixed(1) + "°  <b>Elev:</b> " +
                 (ev.elevation_m || 0).toFixed(0) + " m</div>";
@@ -3681,8 +3699,8 @@
       var elH = parseInt(document.getElementById("opt-elapsed-h").value, 10) || 0;
       var elM = parseInt(document.getElementById("opt-elapsed-m").value, 10) || 0;
       var mcLine = msg.microclimate_used
-        ? "<span style='color:#cba6f7'>🧠 Microclimate: " + msg.microclimate_runs + " runs applied</span><br>"
-        : "<span style='color:#45475a'>🧠 No microclimate data (run a simulation first)</span><br>";
+        ? "<span style='color:#cba6f7'><img class='icon' src='assets/icons/brain.png' alt=''> Microclimate: " + msg.microclimate_runs + " runs applied</span><br>"
+        : "<span style='color:#45475a'><img class='icon' src='assets/icons/brain.png' alt=''> No microclimate data (run a simulation first)</span><br>";
       var html = "<b>Best IoU: " + (msg.best_iou * 100).toFixed(1) + "%</b>"
         + " · Matched at " + elH + "h " + elM + "m<br>"
         + mcLine
@@ -3742,11 +3760,11 @@
           var iou = msg.best_iou || 0;
           if (iou < 0.25) {
             warn.style.display = "block";
-            warn.innerHTML = "⚠ IoU = " + (iou * 100).toFixed(0) + "% — very poor match. "
+            warn.innerHTML = "<img class='icon' src='assets/icons/alert-triangle.png' alt=''> IoU = " + (iou * 100).toFixed(0) + "% — very poor match. "
               + "The optimizer did not converge. Parameters are unreliable.";
           } else if (iou < 0.40) {
             warn.style.display = "block";
-            warn.innerHTML = "⚠ IoU = " + (iou * 100).toFixed(0) + "% — below 40%. "
+            warn.innerHTML = "<img class='icon' src='assets/icons/alert-triangle.png' alt=''> IoU = " + (iou * 100).toFixed(0) + "% — below 40%. "
               + "Results may not reflect real fire behaviour. Use with caution.";
           } else {
             warn.style.display = "none";
@@ -3935,7 +3953,7 @@
       } else if (msg.type === "microclimate_update") {
         _microclimateSummary = msg.stats;
         _dbg("Microclimate updated (run #" + msg.runs + ")", "#cba6f7");
-        _addEvent("info", "🧠", msg.message || "Microclimate updated.");
+        _addEvent("info", "<img class='icon' src='assets/icons/brain.png' alt=''>", msg.message || "Microclimate updated.");
         _updateMcPanel(msg.stats, msg.runs);
       }
     }
@@ -4328,16 +4346,16 @@
         <div id="mesh-popup-title">3D Terrain Mesh</div>
         <div class="mesh-step-row">
           <span class="mesh-step-tag" id="mstep-dem">DEM</span>
-          <span class="mesh-step-arrow">→</span>
+          <span class="mesh-step-arrow"><img class='icon' src='assets/icons/arrow-right.png' alt=''></span>
           <span class="mesh-step-tag" id="mstep-pts">Point Cloud</span>
-          <span class="mesh-step-arrow">→</span>
+          <span class="mesh-step-arrow"><img class='icon' src='assets/icons/arrow-right.png' alt=''></span>
           <span class="mesh-step-tag" id="mstep-tri">Surface</span>
         </div>
       </div>
       <!-- E. Wind button + close -->
-      <button id="mesh-wind-btn" onclick="toggleMeshWind()" title="Overlay wind arrows (reads panel Wind Speed / Dir)">🌬 Wind</button>
-      <button id="mesh-del-btn"  onclick="deleteMeshPin()"   title="Remove this 3D pin from the map">✕ Pin</button>
-      <button id="mesh-popup-close" onclick="closeMeshPopup()" title="Close">✕</button>
+      <button id="mesh-wind-btn" onclick="toggleMeshWind()" title="Overlay wind arrows (reads panel Wind Speed / Dir)"><img class='icon' src='assets/icons/wind.png' alt=''> Wind</button>
+      <button id="mesh-del-btn"  onclick="deleteMeshPin()"   title="Remove this 3D pin from the map"><img class='icon' src='assets/icons/x.png' alt=''> Pin</button>
+      <button id="mesh-popup-close" onclick="closeMeshPopup()" title="Close"><img class='icon' src='assets/icons/x.png' alt=''></button>
     </div>
     <div id="mesh-popup-body">
       <!-- Loading state -->
@@ -4997,7 +5015,7 @@
   </script>
   <div id="opt-modal">
     <div id="opt-modal-title">
-      <span class="opt-spin">🔥</span> Calibrating · projecting +1 h
+      <span class="opt-spin"><img class='icon' src='assets/icons/flame.png' alt=''></span> Calibrating · projecting +1 h
     </div>
     <div id="opt-progress-track"><div id="opt-progress-fill"></div></div>
     <div class="opt-stat-row">
