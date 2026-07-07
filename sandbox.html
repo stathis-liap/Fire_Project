@@ -394,12 +394,43 @@
     /* ── Water brush cursor ring ─────────────────────────────────────────── */
     #brush-cursor-ring {
       position: absolute; pointer-events: none; z-index: 55;
-      border: 2px solid rgba(137, 220, 235, 0.85);
+      border: 2px solid rgba(137, 220, 235, 0.9);
+      background: rgba(137, 220, 235, 0.12);
+      box-shadow: 0 0 12px rgba(137, 220, 235, 0.25);
       border-radius: 50%;
       transform: translate(-50%, -50%);
       transition: width 0.06s, height 0.06s;
       display: none;
     }
+    #brush-cursor-ring::after {   /* centre aiming dot */
+      content: ""; position: absolute;
+      left: 50%; top: 50%; width: 4px; height: 4px;
+      transform: translate(-50%, -50%);
+      border-radius: 50%; background: rgba(137, 220, 235, 0.95);
+    }
+
+    /* ── Simulation loading overlay ─────────────────────────────────────── */
+    #sim-loading {
+      position: fixed; inset: 0; z-index: 1200;
+      display: none; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(3px);
+    }
+    #sim-loading.visible { display: flex; }
+    #sim-loading-card {
+      background: rgba(var(--panel-bg-rgb), 0.97);
+      border: 1px solid var(--ctp-surface0);
+      border-radius: 12px; padding: 26px 34px 22px; text-align: center;
+      box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6); max-width: 380px;
+    }
+    #sim-loading-spinner {
+      width: 42px; height: 42px; margin: 0 auto 14px;
+      border: 4px solid var(--ctp-surface0); border-top-color: #fab387;
+      border-radius: 50%; animation: simspin 0.9s linear infinite;
+    }
+    @keyframes simspin { to { transform: rotate(360deg); } }
+    #sim-loading-title { font-size: 16px; font-weight: 700; color: var(--ctp-text); margin-bottom: 6px; }
+    #sim-loading-msg   { font-size: 12.5px; color: var(--ctp-subtext0); min-height: 17px; }
+    #sim-loading-hint  { font-size: 10.5px; color: var(--ctp-overlay0); margin-top: 10px; line-height: 1.5; }
 
     /* ── Tool controls (inside panel) ───────────────────────────────────── */
     #brush-controls, #containment-controls, #firebreak-controls {
@@ -832,6 +863,16 @@
 
   <!-- Water brush cursor ring (follows mouse in water mode) -->
   <div id="brush-cursor-ring"></div>
+
+  <!-- Simulation-preparing overlay: shown from Run click until init_ack -->
+  <div id="sim-loading">
+    <div id="sim-loading-card">
+      <div id="sim-loading-spinner"></div>
+      <div id="sim-loading-title">Preparing simulation</div>
+      <div id="sim-loading-msg">Contacting server…</div>
+      <div id="sim-loading-hint">Fetching terrain, vegetation and weather — this can take up to a minute.</div>
+    </div>
+  </div>
 
   <!-- Rect analysis panel (shown after Shift+drag in cursor mode) -->
   <div id="rect-analysis">
@@ -1559,6 +1600,18 @@
       el.className   = cls || "info";
     }
 
+    // ── Simulation loading overlay ────────────────────────────────────────────
+    function _showSimLoading(msg) {
+      document.getElementById("sim-loading").classList.add("visible");
+      if (msg) document.getElementById("sim-loading-msg").textContent = msg;
+    }
+    function _hideSimLoading() {
+      document.getElementById("sim-loading").classList.remove("visible");
+    }
+    function _simLoadingVisible() {
+      return document.getElementById("sim-loading").classList.contains("visible");
+    }
+
     function _prepareOverlayCtx(canvasId) {
       var canvas = document.getElementById(canvasId);
       var mapEl = map.getContainer();
@@ -1740,11 +1793,14 @@
       });
       map.addLayer({
         id: "water-layer", type: "fill", source: SRC_WATER,
-        paint: { "fill-color": "#89dceb", "fill-opacity": 0.45 },
+        paint: {
+          "fill-color":   "#89dceb",
+          "fill-opacity": ["coalesce", ["get", "alpha"], 0.45],
+        },
       });
       map.addLayer({
         id: "water-outline", type: "line", source: SRC_WATER,
-        paint: { "line-color": "#89dceb", "line-width": 1.5 },
+        paint: { "line-color": "#89dceb", "line-width": 0.8, "line-opacity": 0.5 },
       });
 
       // ── Ground-truth mask layers ──────────────────────────────────────────
@@ -3026,72 +3082,125 @@
 
     function _applyWaterBrushAt(lat, lng) {
       var p = _getBrushParams();
-      // Visual circle on map
-      _addWaterBrushCircle(lat, lng, p.radius_m);
-      // Send to server
+      // Monte Carlo spray: instead of one rigid disc, scatter 5–7 droplets
+      // inside the aim ring — random position (uniform over the disc), random
+      // size, random landing delay. The physics gets the whole batch in ONE
+      // message (per-droplet messages flooded the sim's intervention queue);
+      // only the visuals are staggered for the spray feel.
+      var nDrops = 5 + Math.floor(Math.random() * 3);
+      var cosLat = Math.cos(lat * Math.PI / 180);
+      var droplets = [];
+      for (var i = 0; i < nDrops; i++) {
+        var ang  = Math.random() * 2 * Math.PI;
+        var dist = Math.sqrt(Math.random()) * 0.80 * p.radius_m;
+        droplets.push({
+          lat: lat + (dist * Math.sin(ang)) / 111320,
+          lon: lng + (dist * Math.cos(ang)) / (111320 * Math.max(0.1, cosLat)),
+          radius_m: p.radius_m * (0.22 + Math.random() * 0.20),
+        });
+      }
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           type: "intervention",
           intervention_type: "water_brush",
-          lat: lat, lon: lng,
-          radius_m: p.radius_m,
+          droplets: droplets,
           intensity: p.intensity,
           falloff: p.falloff,
           hardness: p.hardness,
         }));
       }
+      droplets.forEach(function (d, i) {
+        var alpha = 0.30 + Math.random() * 0.35;
+        setTimeout(function () {
+          _addWaterBrushCircle(d.lat, d.lon, d.radius_m, alpha);
+        }, i * 35 + Math.random() * 30);   // staggered splats = spray feel
+      });
     }
 
-    function _addWaterBrushCircle(lat, lng, radiusM) {
-      var N = 32;
-      var latRad = lat * Math.PI / 180;
-      var dLat = radiusM / 111320;
-      var dLon = dLat / Math.max(0.1, Math.cos(latRad));
-      var ring = [];
-      for (var i = 0; i <= N; i++) {
-        var a = (i / N) * 2 * Math.PI;
-        ring.push([lng + dLon * Math.cos(a), lat + dLat * Math.sin(a)]);
-      }
-      waterDrops.push({
-        type: "Feature",
-        geometry: { type: "Polygon", coordinates: [ring] },
-        properties: { brush: true }
-      });
-      // Keep max 200 brush circles for performance
-      if (waterDrops.length > 200) waterDrops.splice(0, waterDrops.length - 200);
+    var _waterFlushTimer = null;
+    var WATER_LIFE_MS = 12500;   // droplet visual lifetime before it "evaporates"
+
+    function _flushWaterSource() {
+      _waterFlushTimer = null;
       if (map.getSource(SRC_WATER)) {
         map.getSource(SRC_WATER).setData({ type: "FeatureCollection", features: waterDrops });
       }
     }
+
+    function _scheduleWaterFlush() {
+      // Coalesce bursts of droplets into one setData per ~60 ms — per-droplet
+      // full-source updates were a big part of the mid-stroke jank.
+      if (!_waterFlushTimer) _waterFlushTimer = setTimeout(_flushWaterSource, 60);
+    }
+
+    function _addWaterBrushCircle(lat, lng, radiusM, alpha) {
+      var N = 14;
+      var latRad = lat * Math.PI / 180;
+      var dLat = radiusM / 111320;
+      var dLon = dLat / Math.max(0.1, Math.cos(latRad));
+      // Slightly irregular outline so droplets read as splats, not perfect discs
+      var ring = [];
+      var wob = [];
+      for (var w = 0; w < N; w++) wob.push(0.85 + Math.random() * 0.3);
+      for (var i = 0; i <= N; i++) {
+        var a = (i / N) * 2 * Math.PI;
+        var f = wob[i % N];
+        ring.push([lng + dLon * f * Math.cos(a), lat + dLat * f * Math.sin(a)]);
+      }
+      waterDrops.push({
+        type: "Feature",
+        geometry: { type: "Polygon", coordinates: [ring] },
+        properties: { brush: true, alpha: alpha != null ? alpha : 0.45,
+                      alpha0: alpha != null ? alpha : 0.45, born: Date.now() }
+      });
+      // Hard cap as a safety net (the evaporation ticker is the real limiter)
+      if (waterDrops.length > 600) waterDrops.splice(0, waterDrops.length - 600);
+      _scheduleWaterFlush();
+    }
+
+    // Evaporation ticker: brush droplets fade out and die over WATER_LIFE_MS,
+    // so the map stays readable and the layer never accumulates forever.
+    setInterval(function () {
+      if (!waterDrops.length) return;
+      var now = Date.now(), changed = false, kept = [];
+      for (var i = 0; i < waterDrops.length; i++) {
+        var f = waterDrops[i], pr = f.properties || {};
+        if (!pr.brush || !pr.born) { kept.push(f); continue; }   // legacy circles persist
+        var age = now - pr.born;
+        if (age >= WATER_LIFE_MS) { changed = true; continue; }  // evaporated
+        var fade = age / WATER_LIFE_MS;
+        pr.alpha = pr.alpha0 * (1 - fade * fade);                // ease-out fade
+        kept.push(f); changed = true;
+      }
+      if (changed) { waterDrops = kept; _scheduleWaterFlush(); }
+    }, 400);
 
     // Brush cursor ring — follows mouse when in water mode
     function _initBrushRing() {
       _brushRing = document.getElementById("brush-cursor-ring");
     }
 
+    var _lastRingXY = null;   // remembered so zoom/slider changes can resize in place
+
     function _updateBrushRing(clientX, clientY) {
       if (!_brushRing || mode !== "water") return;
       _brushRing.style.display = "block";
-      if (clientX === undefined) return;
+      if (clientX === undefined) {
+        if (!_lastRingXY) return;
+        clientX = _lastRingXY[0]; clientY = _lastRingXY[1];
+      }
+      _lastRingXY = [clientX, clientY];
 
-      var p = _getBrushParams();
-      var radiusM = p.radius_m;
-
-      // Compute pixel radius: project two points 1° lat apart, measure pixel distance
-      if (!_fireBbox) { _brushRing.style.opacity = "0"; return; }
-      var c1 = map.project([(_fireBbox.lon_min + _fireBbox.lon_max) / 2,
-                            (_fireBbox.lat_min + _fireBbox.lat_max) / 2]);
-      var c2 = map.project([(_fireBbox.lon_min + _fireBbox.lon_max) / 2,
-                            (_fireBbox.lat_min + _fireBbox.lat_max) / 2 + 1 / 111320]);
-      var pxPerM = Math.abs(c2.y - c1.y);
-      var radiusPx = Math.max(4, radiusM * pxPerM);
-
+      // Metres per screen pixel from the web-mercator scale at the cursor's
+      // latitude — no simulation/bbox needed, works from page load.
       var mapRect = map.getContainer().getBoundingClientRect();
-      var x = clientX - mapRect.left;
-      var y = clientY - mapRect.top;
+      var ll = map.unproject([clientX - mapRect.left, clientY - mapRect.top]);
+      var mPerPx = 40075016.686 * Math.abs(Math.cos(ll.lat * Math.PI / 180))
+                   / (512 * Math.pow(2, map.getZoom()));
+      var radiusPx = Math.max(4, _getBrushParams().radius_m / mPerPx);
 
-      _brushRing.style.left   = x + "px";
-      _brushRing.style.top    = y + "px";
+      _brushRing.style.left   = clientX + "px";
+      _brushRing.style.top    = clientY + "px";
       _brushRing.style.width  = (radiusPx * 2) + "px";
       _brushRing.style.height = (radiusPx * 2) + "px";
       _brushRing.style.opacity = "1";
@@ -3910,6 +4019,7 @@
     // ── WebSocket message handler ─────────────────────────────────────────────
     function _handleMsg(msg) {
       if (msg.type === "init_ack") {
+        _hideSimLoading();
         _dtMinutes = msg.dt_minutes || 0.05;
         _cellM     = msg.cell_m    || 50;
         _simRows   = msg.rows  || 0;
@@ -3951,6 +4061,10 @@
       } else if (msg.type === "status") {
         setStatus(msg.message, "info");
         _dbg("Status: " + msg.message, "#a6adc8");
+        // While the pre-simulation overlay is up, mirror server progress into it
+        if (_simLoadingVisible() && msg.message) {
+          document.getElementById("sim-loading-msg").textContent = msg.message;
+        }
         if (msg.paused || (msg.message && msg.message.startsWith("Scrubbing"))) {
           document.getElementById("btn-pause").style.display  = "none";
           document.getElementById("btn-resume").style.display = "block";
@@ -3963,6 +4077,7 @@
                   msg.message || '');
 
       } else if (msg.type === "error") {
+        _hideSimLoading();
         setStatus("Error: " + msg.message, "err");
         _dbg("Error: " + msg.message, "#f38ba8");
 
@@ -4086,6 +4201,7 @@
       document.getElementById("btn-run").style.display    = "none";
       document.getElementById("btn-pause").style.display  = "block";
       document.getElementById("btn-resume").style.display = "none";
+      _showSimLoading("Contacting server…");
 
       // ── WebSocket with automatic retry (server may still be initialising) ──
       var _wsAttempt = 0;
@@ -4124,6 +4240,7 @@
             setStatus("Server not ready — retrying in " + (delay/1000).toFixed(1) + "s…", "info");
             setTimeout(_connect, delay);
           } else {
+            _hideSimLoading();
             setStatus("Cannot reach simulation server. Make sure python main.py is running.", "err");
             _resetButtons();
             simRunning = false;
@@ -4131,6 +4248,7 @@
         };
 
         ws.onclose = function () {
+          _hideSimLoading();
           if (!simRunning) return;  // intentional close (pause/end)
           setStatus("Simulation finished.", "ok");
           simRunning = false;
@@ -4358,6 +4476,8 @@
       }, 300);
       setStatus("Firebreak mode restored. Left-click to add the next point.", "info");
     });
+
+    map.on("zoom", function () { _updateBrushRing(); });   // keep ring true-to-scale
 
     map.on("mousemove", function (e) {
       var oe = e.originalEvent;

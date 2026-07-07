@@ -107,12 +107,91 @@ def _quadrant_ros(sim, state: np.ndarray,
         max_p = sim.p_spread[:, mask].max(axis=0)
         return float(max_p.mean() * cell_m / max(sim.dt, 1e-9))
 
+    # Grid is south-up (row 0 = south, see GeoGrid): the NORTH quadrant is
+    # the cells with row index ABOVE the centroid.
     return (
-        _qros(active & (row_g <  cr)),
-        _qros(active & (col_g >  cc)),
-        _qros(active & (row_g >  cr)),
-        _qros(active & (col_g <  cc)),
+        _qros(active & (row_g >  cr)),   # N
+        _qros(active & (col_g >  cc)),   # E
+        _qros(active & (row_g <  cr)),   # S
+        _qros(active & (col_g <  cc)),   # W
     )
+
+
+# South-up grid: north = increasing row index.
+_DIR_SHIFT = {"N": (1, 0), "S": (-1, 0), "E": (0, 1), "W": (0, -1)}
+
+
+def _spread_context(sim, land, ros: dict, cell_m: float) -> dict | None:
+    """
+    Sample the terrain just ahead (~150 m) of the fire front in the dominant
+    spread direction. Returns the raw numbers the FireInfoPanel turns into
+    plain-language "heading / stalled and why" reports:
+    fuel type ahead, moisture ahead, slope, effective wind, share of
+    non-burnable ground.
+    """
+    state   = sim.state
+    burning = state == 1
+    if not burning.any():
+        return None
+
+    dom_dir = max(ros, key=ros.get)
+    rows, cols = state.shape
+
+    # A direction only counts as "the" heading when it clearly beats the
+    # runner-up — otherwise the fire is effectively spreading on all sides
+    # and any single compass label would be noise.
+    ranked = sorted(ros.values(), reverse=True)
+    dominant = ranked[0] > 0 and (len(ranked) < 2 or ranked[0] >= 1.25 * ranked[1])
+
+    k = max(2, int(150.0 / max(cell_m, 1e-6)))   # look-ahead in cells
+    dr, dc = _DIR_SHIFT[dom_dir]
+    fr, fc = np.where(burning)
+    tr, tc = fr + dr * k, fc + dc * k
+    ok = (tr >= 0) & (tr < rows) & (tc >= 0) & (tc < cols)
+    if not ok.any():
+        return None
+    fr, fc, tr, tc = fr[ok], fc[ok], tr[ok], tc[ok]
+
+    # Open (10 m) wind as the user knows it — set_wind() keeps these current
+    # through hourly weather updates. The sim's own wind grids hold *midflame*
+    # wind (already scaled down by the vegetation's WAF), which would read as
+    # "calm" to a human even in a 9 m/s gale, so don't use those for labels.
+    wind_speed  = float(getattr(land, "wind_speed", 0.0) or 0.0)
+    wind_toward = float(getattr(land, "wind_dir", 0.0) or 0.0) % 360.0
+    if wind_speed <= 0.0:   # fallback: derive from the midflame grids
+        wu = float(np.mean(sim._wind_u_grid))
+        wv = float(np.mean(sim._wind_v_grid))
+        wind_speed  = float(np.hypot(wu, wv))
+        wind_toward = float(np.degrees(np.arctan2(wu, wv))) % 360.0
+    ctx = {
+        "dir":             dom_dir,
+        "dominant":        bool(dominant),
+        "ros_m_min":       float(ros[dom_dir]),
+        "wind_speed_ms":   wind_speed,
+        "wind_toward_deg": wind_toward,
+    }
+
+    unburned = state[tr, tc] == 0
+    if unburned.any():
+        tru, tcu = tr[unburned], tc[unburned]
+        fru, fcu = fr[unburned], fc[unburned]
+        fuels = land.fuel_map[tru, tcu]
+        try:
+            non_comb = land.fuel_names.index("Non_Combustible")
+        except ValueError:
+            non_comb = -1
+        ctx["noncomb_frac"]   = float(np.mean(fuels == non_comb))
+        combustible = fuels[fuels != non_comb]
+        if combustible.size:
+            counts = np.bincount(combustible, minlength=len(land.fuel_names))
+            ctx["fuel_ahead"] = land.fuel_names[int(np.argmax(counts))]
+        ctx["moisture_ahead"] = float(np.mean(land.moisture[tru, tcu]))
+        ctx["elev_delta_m"]   = float(np.mean(land.elevation[tru, tcu])
+                                      - np.mean(land.elevation[fru, fcu]))
+    else:
+        ctx["noncomb_frac"] = 1.0
+
+    return ctx
 
 
 def _state_to_geojson(state: np.ndarray, geo_grid: GeoGrid,
@@ -453,7 +532,7 @@ def _apply_water_drop(land: Landscape, sim: CellularAutomataFire,
             sim.apply_water_mask(wet_mask, wetness=0.92)
         else:
             active = wet_mask & (sim.state == 1)
-            sim.state[active] = 0
+            sim.state[active] = 2   # doused cells stay scorched, not pristine
             sim.burn_timer[active] = 0
             sim.ignition_fraction[wet_mask & (sim.state != 2)] = 0.0
 
@@ -1164,14 +1243,19 @@ async def _handle(websocket):
                     await send(fire_info.intervention("water_drop", n))
 
                 elif action == "water_brush":
-                    _apply_water_brush(
-                        land, sim, geo_grid,
-                        float(iv["lat"]), float(iv["lon"]),
-                        float(iv.get("radius_m", 200.0)), cell_m,
-                        intensity=float(iv.get("intensity", 1.0)),
-                        falloff=float(iv.get("falloff", 0.8)),
-                        hardness=float(iv.get("hardness", 0.5)),
-                    )
+                    # Either a single droplet (lat/lon at top level) or a
+                    # Monte Carlo batch under "droplets" — one message per
+                    # brush application keeps the intervention queue light.
+                    _drops = iv.get("droplets") or [iv]
+                    for _d in _drops:
+                        _apply_water_brush(
+                            land, sim, geo_grid,
+                            float(_d["lat"]), float(_d["lon"]),
+                            float(_d.get("radius_m", iv.get("radius_m", 200.0))), cell_m,
+                            intensity=float(iv.get("intensity", 1.0)),
+                            falloff=float(iv.get("falloff", 0.8)),
+                            hardness=float(iv.get("hardness", 0.5)),
+                        )
 
             if ctrl["paused"]:
                 await asyncio.sleep(0.1)
@@ -1286,6 +1370,17 @@ async def _handle(websocket):
                     ros={"N": ros_n, "E": ros_e, "S": ros_s, "W": ros_w},
                 ):
                     await send(ev)
+                try:
+                    _sctx = _spread_context(
+                        sim, land,
+                        {"N": ros_n, "E": ros_e, "S": ros_s, "W": ros_w}, cell_m)
+                    for ev in fire_info.spread_report(
+                            _sctx,
+                            total_ha=burned_ha + active_ha,
+                            minutes=round(simulated_minutes, 1)):
+                        await send(ev)
+                except Exception as exc:
+                    log.debug("spread_report failed: %s", exc)
                 last_send_time = now
 
             await asyncio.sleep(STEP_SLEEP_S)

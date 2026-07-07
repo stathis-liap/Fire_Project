@@ -25,6 +25,23 @@ SLOWDOWN_FACTOR = 0.60
 MIN_ACTIVE_FOR_SLOWDOWN = 2.0
 INTERVENTION_RECENT_S = 90.0
 
+# ── Spread-report thresholds (sim time, not wall time) ──────────────────────
+REPORT_INTERVAL_MIN   = 60.0    # periodic "heading X because Y" report
+DIR_CHANGE_COOLDOWN_MIN = 20.0  # min sim-minutes between "fire turned" reports
+MIN_REPORT_ROS        = 0.5     # m/min — below this the front isn't really moving
+STALL_WINDOW_MIN      = 45.0    # growth window watched for a stall
+STALL_GROWTH_DAA      = 5.0     # < this growth inside the window = "stopped growing"
+WIND_ALIGN_DEG        = 60.0    # spread within this angle of the wind = wind-driven
+WIND_DRIVEN_MIN_MS    = 3.0     # weaker wind than this can't be called the driver
+UPHILL_DELTA_M        = 6.0     # mean climb over the look-ahead = slope-driven
+DRY_FUEL_MOISTURE     = 0.10    # drier than this = "running through dry fuel"
+DAMP_FUEL_MOISTURE    = 0.22    # wetter than this = too damp to catch
+BARRIER_NONCOMB_FRAC  = 0.50    # this much bare/urban ground ahead = natural barrier
+CALM_WIND_MS          = 1.5
+
+_DIR_WORD    = {"N": "NORTH", "E": "EAST", "S": "SOUTH", "W": "WEST"}
+_DIR_BEARING = {"N": 0.0, "E": 90.0, "S": 180.0, "W": 270.0}
+
 # Icon names (assets/icons/<name>.png) — resolved to <img> tags client-side.
 _ICONS: dict[str, str] = {
     "info": "play",
@@ -42,6 +59,33 @@ def _fmt_time(mins: float) -> str:
     h = int(mins // 60)
     m = int(round(mins % 60))
     return f"{h}h {m}min" if h > 0 else f"{m} min"
+
+
+def _fuel_word(name: str) -> str:
+    """'Aleppo_Pine' -> 'aleppo pine' — readable fuel name."""
+    return name.replace("_", " ").lower()
+
+
+def _wind_word(speed_ms: float) -> str:
+    if speed_ms >= 10.0:
+        return "very strong"
+    if speed_ms >= 6.0:
+        return "strong"
+    return "moderate"
+
+
+def _pace_word(ros_m_min: float) -> str:
+    kmh = ros_m_min * 0.06
+    if kmh >= 1.0:
+        return "FAST"
+    if kmh >= 0.3:
+        return "steadily"
+    return "slowly"
+
+
+def _bearing_gap(a: float, b: float) -> float:
+    d = abs(a - b) % 360.0
+    return min(d, 360.0 - d)
 
 
 def _event_dict(event_type: str, message: str) -> dict[str, Any]:
@@ -66,6 +110,11 @@ class FireInfoPanel:
         self._last_active = 0.0
         self._extinguished = False
         self._cell_daa = 0.0   # area of one grid cell, in daa — for cells → area display
+        # Spread-report state (times in sim minutes)
+        self._last_report_min = -1e9
+        self._last_dir: str | None = None
+        self._area_history: list[tuple[float, float]] = []   # (sim_min, total_daa)
+        self._stalled = False
 
     def init_started(self, rows: int, cols: int, cell_m: float) -> dict[str, Any]:
         self._cell_daa = (cell_m * cell_m) / 1000.0   # 1 daa = 1000 m²
@@ -141,7 +190,7 @@ class FireInfoPanel:
             max_dir = max(ros, key=ros.get)
             events.append(_event_dict(
                 "danger",
-                f"Rapid spread toward {max_dir} — {ros_max * 0.06:.1f} km/h",
+                f"Rapid spread toward {_DIR_WORD.get(max_dir, max_dir)} — {ros_max * 0.06:.1f} km/h",
             ))
 
         if self._last_active > MIN_ACTIVE_FOR_SLOWDOWN and active_ha > 0 and active_ha < self._last_active * SLOWDOWN_FACTOR:
@@ -162,6 +211,113 @@ class FireInfoPanel:
             ))
 
         self._last_active = active_ha
+        return events
+
+    # ── Spread direction & stall analysis ────────────────────────────────────
+    # Turns the sampled front conditions (see server._spread_context) into
+    # plain-language reports for the operations log. Deliberately a chain of
+    # simple threshold checks, ordered by how decisive each factor is.
+
+    def _heading_reason(self, ctx: Dict[str, Any]) -> str:
+        wind_ms  = ctx.get("wind_speed_ms", 0.0)
+        gap      = _bearing_gap(_DIR_BEARING[ctx["dir"]],
+                                ctx.get("wind_toward_deg", 0.0))
+        if wind_ms >= WIND_DRIVEN_MIN_MS and gap <= WIND_ALIGN_DEG:
+            return f"pushed by a {_wind_word(wind_ms)} wind"
+        if ctx.get("elev_delta_m", 0.0) >= UPHILL_DELTA_M:
+            return "climbing uphill (fires accelerate on slopes)"
+        if (ctx.get("moisture_ahead", 1.0) < DRY_FUEL_MOISTURE
+                and ctx.get("fuel_ahead")):
+            return f"running through dry {_fuel_word(ctx['fuel_ahead'])}"
+        if ctx.get("fuel_ahead"):
+            return f"following the {_fuel_word(ctx['fuel_ahead'])} in its path"
+        return "following the driest fuel available"
+
+    def _stall_reason(self, ctx: Dict[str, Any]) -> str:
+        now = time.monotonic()
+        if (self._last_intv in ("firebreak", "containment_line", "water_drop")
+                and now - self._last_intv_ts < INTERVENTION_RECENT_S * 4):
+            return "your intervention is holding it back"
+        if ctx.get("noncomb_frac", 0.0) > BARRIER_NONCOMB_FRAC:
+            return "it has reached ground with nothing to burn (roads, buildings or bare rock)"
+        if ctx.get("moisture_ahead", 0.0) > DAMP_FUEL_MOISTURE:
+            return "the vegetation ahead is too damp to catch"
+        if self._humidity > 55:
+            return f"high air humidity ({self._humidity:.0f}%) is protecting the vegetation"
+        if ctx.get("wind_speed_ms", 99.0) < CALM_WIND_MS:
+            return "the wind has died down and the flames can't reach new fuel"
+        return "it is running out of dry fuel"
+
+    def spread_report(self,
+                      ctx: Dict[str, Any] | None,
+                      total_ha: float,
+                      minutes: float) -> List[dict[str, Any]]:
+        events: List[dict[str, Any]] = []
+        if ctx is None or not self._started or self._extinguished:
+            return events
+
+        # ── Stall / regrowth detection over a sliding sim-time window ────────
+        self._area_history.append((minutes, total_ha * 10.0))
+        cutoff = minutes - STALL_WINDOW_MIN * 1.5
+        self._area_history = [(t, a) for t, a in self._area_history if t >= cutoff]
+        window = [(t, a) for t, a in self._area_history
+                  if t >= minutes - STALL_WINDOW_MIN]
+        if len(window) >= 2 and window[-1][0] - window[0][0] >= STALL_WINDOW_MIN * 0.8:
+            growth_daa = window[-1][1] - window[0][1]
+            if not self._stalled and growth_daa < STALL_GROWTH_DAA:
+                self._stalled = True
+                events.append(_event_dict(
+                    "warn",
+                    f"Fire has stopped growing — {self._stall_reason(ctx)}",
+                ))
+            elif self._stalled and growth_daa >= STALL_GROWTH_DAA * 3:
+                self._stalled = False
+                self._last_report_min = -1e9   # force a fresh heading report
+                events.append(_event_dict(
+                    "danger",
+                    f"Fire is on the move again — watch the {_DIR_WORD[ctx['dir']]} side",
+                ))
+
+        # ── Periodic / direction-change heading report ────────────────────────
+        if self._stalled or ctx["ros_m_min"] < MIN_REPORT_ROS:
+            return events
+
+        pace  = _pace_word(ctx["ros_m_min"])
+        speed = (f"moving {pace}" if pace != "FAST"
+                 else f"moving FAST ({ctx['ros_m_min'] * 0.06:.1f} km/h)")
+        due   = minutes - self._last_report_min >= REPORT_INTERVAL_MIN
+
+        if not ctx.get("dominant", True):
+            # No single front is winning — an "all directions" note beats a
+            # noisy stream of compass flips.
+            if due or self._last_report_min < 0:
+                if ctx.get("wind_speed_ms", 0.0) < WIND_DRIVEN_MIN_MS:
+                    why = "no strong wind to steer it, so it burns outward evenly"
+                elif ctx.get("fuel_ahead"):
+                    why = f"dry {_fuel_word(ctx['fuel_ahead'])} on every side"
+                else:
+                    why = "dry fuel on every side"
+                events.append(_event_dict(
+                    "danger" if pace == "FAST" else "milestone",
+                    f"Fire is spreading in ALL directions, {speed} — {why}",
+                ))
+                self._last_report_min = minutes
+                self._last_dir        = None
+            return events
+
+        dir_changed = (self._last_dir is not None
+                       and ctx["dir"] != self._last_dir
+                       and minutes - self._last_report_min >= DIR_CHANGE_COOLDOWN_MIN)
+        if dir_changed or due or self._last_dir is None:
+            head = (f"Fire turned {_DIR_WORD[ctx['dir']]}" if dir_changed
+                    else f"Fire is heading {_DIR_WORD[ctx['dir']]}")
+            events.append(_event_dict(
+                "danger" if pace == "FAST" else "milestone",
+                f"{head}, {speed} — {self._heading_reason(ctx)}",
+            ))
+            self._last_report_min = minutes
+            self._last_dir        = ctx["dir"]
+
         return events
 
     def simulation_completed(self, count: int) -> dict[str, Any]:
