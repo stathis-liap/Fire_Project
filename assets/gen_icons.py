@@ -19,8 +19,9 @@ FINAL = 64        # final output size
 W = 15            # stroke width at supersample scale
 
 # Catppuccin Mocha palette (matches existing UI colors)
-TEXT   = (205, 214, 244, 255)   # #cdd6f4
+TEXT   = (205, 214, 244, 255)   # #cdd6f4 — avoid for icons: too light for a light theme
 DIM    = (108, 112, 134, 255)   # #6c7086
+NEUTRAL = (147, 153, 178, 255)  # #9399b2 — Mocha overlay2: readable on both dark and light bg
 BLUE   = (137, 180, 250, 255)   # #89b4fa
 TEAL   = (137, 220, 235, 255)   # #89dceb
 GREEN  = (166, 227, 161, 255)   # #a6e3a1
@@ -219,9 +220,9 @@ def icon_alert():
 # ── 8. box (3D view) ─────────────────────────────────────────────────────────
 def icon_box():
     img = canvas(); d = ImageDraw.Draw(img)
-    stroke(d, [(128, 24), (226, 76), (128, 128), (30, 76)], TEXT, closed=True)
-    stroke(d, [(30, 76), (30, 180), (128, 232), (128, 128)], TEXT, closed=True)
-    stroke(d, [(226, 76), (226, 180), (128, 232)], TEXT)
+    stroke(d, [(128, 24), (226, 76), (128, 128), (30, 76)], NEUTRAL, closed=True)
+    stroke(d, [(30, 76), (30, 180), (128, 232), (128, 128)], NEUTRAL, closed=True)
+    stroke(d, [(226, 76), (226, 180), (128, 232)], NEUTRAL)
     save(img, "box")
 
 
@@ -247,7 +248,7 @@ def icon_droplet():
 # ── 11/12. volume-2 / volume-x ───────────────────────────────────────────────
 def icon_volume(muted=False):
     img = canvas(); d = ImageDraw.Draw(img)
-    color = DIM if muted else TEXT
+    color = DIM if muted else NEUTRAL
     d.polygon([(30, 96), (76, 96), (76, 160), (30, 160)], fill=color)
     d.polygon([(76, 96), (130, 56), (130, 200), (76, 160)], fill=color)
     if muted:
@@ -262,9 +263,9 @@ def icon_volume(muted=False):
 # ── 13. wrench (tools) ────────────────────────────────────────────────────────
 def icon_wrench():
     img = canvas(); d = ImageDraw.Draw(img)
-    circle(d, 176, 80, 40, TEXT, width=W)
-    stroke(d, [(148, 108), (60, 196), (40, 216), (60, 216), (80, 196)], TEXT)
-    d.line([(196, 60), (216, 40)], fill=TEXT, width=W)
+    circle(d, 176, 80, 40, NEUTRAL, width=W)
+    stroke(d, [(148, 108), (60, 196), (40, 216), (60, 216), (80, 196)], NEUTRAL)
+    d.line([(196, 60), (216, 40)], fill=NEUTRAL, width=W)
     save(img, "wrench")
 
 
@@ -296,13 +297,13 @@ def icon_truck():
 # ── 16. satellite ─────────────────────────────────────────────────────────────
 def icon_satellite():
     img = canvas(); d = ImageDraw.Draw(img)
-    d.rectangle([96, 96, 160, 160], fill=None, outline=TEXT, width=W)
-    d.line([(72, 72), (96, 96)], fill=TEXT, width=W)
-    d.line([(184, 184), (160, 160)], fill=TEXT, width=W)
-    stroke(d, [(150, 106), (204, 52)], TEXT)
-    stroke(d, [(56, 40), (20, 40)], TEXT)
-    stroke(d, [(40, 24), (40, 60)], TEXT)
-    d.arc([170, 150, 236, 216], 200, 300, fill=TEXT, width=int(W*0.7))
+    d.rectangle([96, 96, 160, 160], fill=None, outline=NEUTRAL, width=W)
+    d.line([(72, 72), (96, 96)], fill=NEUTRAL, width=W)
+    d.line([(184, 184), (160, 160)], fill=NEUTRAL, width=W)
+    stroke(d, [(150, 106), (204, 52)], NEUTRAL)
+    stroke(d, [(56, 40), (20, 40)], NEUTRAL)
+    stroke(d, [(40, 24), (40, 60)], NEUTRAL)
+    d.arc([170, 150, 236, 216], 200, 300, fill=NEUTRAL, width=int(W*0.7))
     save(img, "satellite")
 
 
@@ -342,9 +343,9 @@ def icon_zap():
 # ── 21. clock ─────────────────────────────────────────────────────────────────
 def icon_clock():
     img = canvas(); d = ImageDraw.Draw(img)
-    circle(d, 128, 128, 96, TEXT, width=W)
-    d.line([(128, 128), (128, 72)], fill=TEXT, width=W)
-    d.line([(128, 128), (172, 150)], fill=TEXT, width=W)
+    circle(d, 128, 128, 96, NEUTRAL, width=W)
+    d.line([(128, 128), (128, 72)], fill=NEUTRAL, width=W)
+    d.line([(128, 128), (172, 150)], fill=NEUTRAL, width=W)
     save(img, "clock")
 
 
@@ -357,30 +358,30 @@ def icon_cloud_sun():
         x2 = 74 + 48 * math.cos(math.radians(ang)); y2 = 66 + 48 * math.sin(math.radians(ang))
         d.line([(x1, y1), (x2, y2)], fill=YELLOW, width=int(W*0.6))
     # Solid filled cloud: base pill + two puffs, all one solid colour
-    circle(d, 148, 128, 44, TEXT, fill=TEXT)
-    circle(d, 98, 144, 34, TEXT, fill=TEXT)
-    d.rounded_rectangle([56, 144, 214, 210], radius=32, fill=TEXT)
+    circle(d, 148, 128, 44, NEUTRAL, fill=NEUTRAL)
+    circle(d, 98, 144, 34, NEUTRAL, fill=NEUTRAL)
+    d.rounded_rectangle([56, 144, 214, 210], radius=32, fill=NEUTRAL)
     save(img, "cloud-sun")
 
 
 # ── 23. clipboard-list (events) ───────────────────────────────────────────────
 def icon_clipboard():
     img = canvas(); d = ImageDraw.Draw(img)
-    d.rounded_rectangle([50, 40, 206, 226], radius=14, outline=TEXT, width=W)
-    d.rounded_rectangle([94, 26, 162, 62], radius=10, outline=TEXT, width=W)
+    d.rounded_rectangle([50, 40, 206, 226], radius=14, outline=NEUTRAL, width=W)
+    d.rounded_rectangle([94, 26, 162, 62], radius=10, outline=NEUTRAL, width=W)
     for y in (108, 144, 180):
-        stroke(d, [(76, y), (180, y)], TEXT, width=int(W*0.7))
+        stroke(d, [(76, y), (180, y)], NEUTRAL, width=int(W*0.7))
     save(img, "clipboard-list")
 
 
 # ── 24. pointer (cursor) ──────────────────────────────────────────────────────
 def icon_pointer():
     img = canvas(); d = ImageDraw.Draw(img)
-    stroke(d, [(90, 40), (90, 150)], TEXT)
-    stroke(d, [(130, 46), (130, 150)], TEXT)
-    stroke(d, [(170, 66), (170, 150)], TEXT)
-    stroke(d, [(210, 96), (210, 150)], TEXT)
-    stroke(d, [(90, 150), (60, 176), (76, 220), (190, 220), (210, 180), (210, 150)], TEXT, closed=False)
+    stroke(d, [(90, 40), (90, 150)], NEUTRAL)
+    stroke(d, [(130, 46), (130, 150)], NEUTRAL)
+    stroke(d, [(170, 66), (170, 150)], NEUTRAL)
+    stroke(d, [(210, 96), (210, 150)], NEUTRAL)
+    stroke(d, [(90, 150), (60, 176), (76, 220), (190, 220), (210, 180), (210, 150)], NEUTRAL, closed=False)
     save(img, "pointer")
 
 
@@ -440,14 +441,14 @@ def icon_folder():
 def icon_corner(right=False):
     img = canvas(); d = ImageDraw.Draw(img)
     if right:
-        stroke(d, [(150, 86), (216, 140), (150, 194)], TEXT)
-        stroke(d, [(216, 140), (96, 140)], TEXT)
-        d.arc([16, 60, 176, 220], 180, 270, fill=TEXT, width=W)
+        stroke(d, [(150, 86), (216, 140), (150, 194)], NEUTRAL)
+        stroke(d, [(216, 140), (96, 140)], NEUTRAL)
+        d.arc([16, 60, 176, 220], 180, 270, fill=NEUTRAL, width=W)
         save(img, "corner-up-right")
     else:
-        stroke(d, [(106, 86), (40, 140), (106, 194)], TEXT)
-        stroke(d, [(40, 140), (160, 140)], TEXT)
-        d.arc([80, 60, 240, 220], 270, 360, fill=TEXT, width=W)
+        stroke(d, [(106, 86), (40, 140), (106, 194)], NEUTRAL)
+        stroke(d, [(40, 140), (160, 140)], NEUTRAL)
+        d.arc([80, 60, 240, 220], 270, 360, fill=NEUTRAL, width=W)
         save(img, "corner-up-left")
 
 
@@ -476,7 +477,7 @@ def icon_mappin():
 # ── 35/36. lock / unlock ─────────────────────────────────────────────────────
 def icon_lock(locked=True):
     img = canvas(); d = ImageDraw.Draw(img)
-    color = TEXT if locked else DIM
+    color = NEUTRAL if locked else DIM
     d.rounded_rectangle([50, 118, 206, 224], radius=14, outline=color, width=W)
     dot(d, 128, 172, 10, color)
     if locked:
@@ -489,8 +490,8 @@ def icon_lock(locked=True):
 # ── 37. x (close) ─────────────────────────────────────────────────────────────
 def icon_x():
     img = canvas(); d = ImageDraw.Draw(img)
-    stroke(d, [(56, 56), (200, 200)], TEXT, width=int(W*1.1))
-    stroke(d, [(200, 56), (56, 200)], TEXT, width=int(W*1.1))
+    stroke(d, [(56, 56), (200, 200)], NEUTRAL, width=int(W*1.1))
+    stroke(d, [(200, 56), (56, 200)], NEUTRAL, width=int(W*1.1))
     save(img, "x")
 
 
@@ -507,6 +508,29 @@ def icon_play():
     img = canvas(); d = ImageDraw.Draw(img)
     d.polygon([(70, 34), (70, 222), (216, 128)], fill=GREEN)
     save(img, "play")
+
+
+# ── 40. sun (light-mode toggle) ───────────────────────────────────────────────
+def icon_sun():
+    img = canvas(); d = ImageDraw.Draw(img)
+    circle(d, 128, 128, 52, YELLOW, fill=YELLOW)
+    for ang in range(0, 360, 45):
+        x1 = 128 + 72 * math.cos(math.radians(ang)); y1 = 128 + 72 * math.sin(math.radians(ang))
+        x2 = 128 + 100 * math.cos(math.radians(ang)); y2 = 128 + 100 * math.sin(math.radians(ang))
+        d.line([(x1, y1), (x2, y2)], fill=YELLOW, width=W)
+    save(img, "sun")
+
+
+# ── 41. moon (dark-mode toggle) ───────────────────────────────────────────────
+def icon_moon():
+    mask = Image.new("L", (S, S), 0)
+    md = ImageDraw.Draw(mask)
+    md.ellipse([40, 32, 216, 208], fill=255)     # main disc
+    md.ellipse([92, 8, 248, 164], fill=0)         # offset cutout -> crescent
+    img = canvas()
+    ImageDraw.Draw(img).ellipse([40, 32, 216, 208], fill=BLUE)
+    img.putalpha(mask)
+    save(img, "moon")
 
 
 if __name__ == "__main__":
@@ -549,4 +573,6 @@ if __name__ == "__main__":
     icon_x()
     icon_arrow_right()
     icon_play()
+    icon_sun()
+    icon_moon()
     print("ALL ICONS GENERATED")

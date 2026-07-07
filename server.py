@@ -1139,7 +1139,7 @@ async def _handle(websocket):
                         decay_hours=float(iv.get("decay_hours", 0.0)),
                     )
                     await send({"type": "status",
-                                "message": f"Containment line deployed: {n} cells protected."})
+                                "message": f"Containment line deployed: {n * cell_m * cell_m / 1000:.1f} daa protected."})
                     await send(fire_info.intervention("containment_line", n))
 
                 elif action == "firebreak":
@@ -1152,7 +1152,7 @@ async def _handle(websocket):
                         zone_label=iv.get("label", None),
                     )
                     await send({"type": "status",
-                                "message": f"Firebreak applied (hard): {n} cells blocked."})
+                                "message": f"Firebreak cut — {n * cell_m * cell_m / 1000:.1f} daa cleared."})
                     await send(fire_info.intervention("firebreak", n))
 
                 elif action == "water_drop":
@@ -1160,7 +1160,7 @@ async def _handle(websocket):
                                           float(iv["lat"]), float(iv["lon"]),
                                           float(iv.get("radius_m", 435.0)), cell_m)
                     await send({"type": "status",
-                                "message": f"Water drop: {n} cells affected."})
+                                "message": f"Water drop — {n * cell_m * cell_m / 1000:.1f} daa cooled."})
                     await send(fire_info.intervention("water_drop", n))
 
                 elif action == "water_brush":
@@ -1254,11 +1254,11 @@ async def _handle(websocket):
                                 label = 'firebreak'
                             label_counts[label] = label_counts.get(label, 0) + 1
                         for label, cnt in label_counts.items():
-                            msg = f"Fire met {label} firebreak zone, couldn't expand (encounters: {cnt})"
+                            msg = f"Firebreak '{label}' is holding — blocked the fire {cnt}x"
                             await send({
                                 "type": "fire_event",
-                                "event_type": "info",
-                                "icon": "🛠",
+                                "event_type": "intervention",
+                                "icon": "wrench",
                                 "message": msg,
                             })
                         # clear encounters
