@@ -8,11 +8,15 @@ Supported sources
   python main.py --source video   --video path/to/file.mp4          (offline test)
   python main.py --source mavlink --connect udp:127.0.0.1:14550     (ArduPilot/PX4)
   python main.py --source mavlink --connect /dev/ttyACM0            (serial)
-  python main.py --source dji                                        (fill in SDK)
+  python main.py --source dji-log --video cache.mp4 --log flight.csv --camera spark
+  python main.py --source dji-log --video cache.mp4 --log DJIFlightRecord.txt --camera spark
+                                        (DJI GO 4 binary .txt or decoded CSV)
 
 Output
 ------
   • Annotated live preview window (disable with --no-preview)
+  • Annotated video saved to  data/vision_check/  when --save-video is used
+    (filename is timestamped — never overwrites an existing file)
   • CSV log at  data/fire_gps_log.csv  (appended across runs)
   • Stdout per-detection line: frame, lat, lon, range, confidence
 """
@@ -46,6 +50,7 @@ from geometry import (
     GeolocResult,
     centroid_of_polygon,
 )
+from dji_log import DJILogBook
 
 # ── Optional: pymavlink (pip install pymavlink) ────────────────────────────────
 try:
@@ -60,6 +65,9 @@ except ImportError:
 BASE_DIR     = SRC_DIR.parent
 WEIGHTS_PATH = str(BASE_DIR / "data" / "fire_yolov8n.pt")
 LOG_PATH     = str(BASE_DIR / "data" / "fire_gps_log.csv")
+VISION_CHECK = BASE_DIR / "data" / "vision_check"
+VISION_CHECK.mkdir(parents=True, exist_ok=True)
+
 
 # ── Camera intrinsics — replace with your calibrated values ───────────────────
 DEFAULT_INTRINSICS = CameraIntrinsics(
@@ -69,6 +77,21 @@ DEFAULT_INTRINSICS = CameraIntrinsics(
     cy=540.0,
     cam_pitch_offset_deg=0.0,   # 0° = nadir; positive = camera pitched forward
 )
+
+# DJI Spark live-feed cache: 1280×720, 81.9° diagonal FOV (1/2.3" sensor).
+# focal_px = (diag_px / 2) / tan(81.9°/2) ≈ 846.  Calibrate for precision work.
+SPARK_INTRINSICS = CameraIntrinsics(
+    fx=846.0,
+    fy=846.0,
+    cx=640.0,
+    cy=360.0,
+    cam_pitch_offset_deg=0.0,   # gimbal pitch is applied via telemetry instead
+)
+
+CAMERA_PROFILES = {
+    "default": DEFAULT_INTRINSICS,
+    "spark":   SPARK_INTRINSICS,
+}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -174,31 +197,59 @@ class MAVLinkInterface(DroneInterface):
             self._mav.close()
 
 
-# ── DJI placeholder ────────────────────────────────────────────────────────────
-class DJIInterface(DroneInterface):
+# ── DJI GO 4 cached video + flight-record CSV (offline, no SD card needed) ────
+class DJILogInterface(DroneInterface):
     """
-    Placeholder for DJI integration.
+    Replays a DJI GO 4 cache video against the flight-record telemetry
+    exported to CSV (see dji_log.py for supported exporters).
 
-    Implement using one of:
-      • DJI Onboard SDK (OSDK) / ROS wrapper
-          https://github.com/dji-sdk/Onboard-SDK-ROS
-      • DJI Payload SDK (PSDK) for embedded payloads
-      • DJI Mobile SDK via a local bridge process
+    Sync: frame 0 is aligned to the moment the record button was pressed
+    (the ``isVideo`` flag in the log) when available, otherwise to the
+    start of the log; --video-offset shifts the alignment in seconds
+    (positive = video starts later in the log).
     """
+
+    def __init__(self, video_path: str, log_csv_path: str,
+                 video_offset_s: float = 0.0):
+        self._video_path = video_path
+        self._log_path   = log_csv_path
+        self._offset     = video_offset_s
+        self._cap: Optional[cv2.VideoCapture] = None
+        self._book: Optional[DJILogBook] = None
+        self._fps        = 30.0
+        self._t0         = 0.0
+        self._frame_idx  = 0
 
     def connect(self) -> None:
-        raise NotImplementedError(
-            "DJI integration is hardware-specific.\n"
-            "Implement get_frame_and_telemetry() using your DJI SDK."
-        )
+        self._book = DJILogBook(self._log_path)
+        self._cap  = cv2.VideoCapture(self._video_path)
+        if not self._cap.isOpened():
+            raise RuntimeError(f"Cannot open video file: {self._video_path}")
+        fps = self._cap.get(cv2.CAP_PROP_FPS)
+        if fps and fps > 1.0:
+            self._fps = fps
+
+        rec_start = self._book.first_recording_time()
+        self._t0 = (rec_start if rec_start is not None else 0.0) + self._offset
+        anchor = "isVideo flag" if rec_start is not None else "log start"
+        print(f"[DJILog] Video opened: {self._video_path} ({self._fps:.1f} fps)")
+        print(f"[DJILog] Frame 0 anchored to {anchor} "
+              f"→ t={self._t0:.1f}s into the log "
+              f"(offset {self._offset:+.1f}s)")
 
     def get_frame_and_telemetry(
         self,
     ) -> Tuple[Optional[np.ndarray], Optional[DroneTelemetry]]:
-        raise NotImplementedError
+        ret, frame = self._cap.read()
+        if not ret:
+            return None, None
+        t_log = self._t0 + self._frame_idx / self._fps
+        self._frame_idx += 1
+        return frame, self._book.telemetry_at(t_log)
 
     def close(self) -> None:
-        pass
+        if self._cap:
+            self._cap.release()
 
 
 # ── Offline video-file mode ────────────────────────────────────────────────────
@@ -299,7 +350,9 @@ class FireEventLogger:
 # ──────────────────────────────────────────────────────────────────────────────
 # Traffic controller
 # ──────────────────────────────────────────────────────────────────────────────
-def run(drone: DroneInterface, show_preview: bool = True) -> None:
+def run(drone: DroneInterface, show_preview: bool = True,
+        intrinsics: Optional[CameraIntrinsics] = None,
+        save_video: bool = False) -> None:
     """
     Main loop:
       1. Grab frame + telemetry from drone.
@@ -307,13 +360,26 @@ def run(drone: DroneInterface, show_preview: bool = True) -> None:
       3. Compute pixel centroid → geometry.py Pinhole → GPS.
       4. Log result to CSV and stdout.
       5. Overlay GPS text on preview frame.
+      6. Optionally save annotated video to data/vision_check/.
     """
     tracker    = HybridFireTracker(WEIGHTS_PATH)
-    geolocator = FireGeolocator(DEFAULT_INTRINSICS)
+    geolocator = FireGeolocator(intrinsics or DEFAULT_INTRINSICS)
     logger     = FireEventLogger(LOG_PATH)
 
     drone.connect()
     print(f"[Main] GPS detections will be logged to: {LOG_PATH}")
+
+    # ── Video writer setup ────────────────────────────────────────────────────────
+    video_writer: Optional[cv2.VideoWriter] = None
+    if save_video:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = str(VISION_CHECK / f"{ts}_annotated.mp4")
+        # We don't know frame size yet — initialise on first frame
+        _vw_init = {"path": out_path, "done": False}
+        print(f"[Main] Annotated video will be saved to: {out_path}")
+    else:
+        _vw_init = None
+
 
     frame_idx  = 0
     prev_time  = 0.0
@@ -359,7 +425,20 @@ def run(drone: DroneInterface, show_preview: bool = True) -> None:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 128), 2,
                     )
 
-            # ── Preview ───────────────────────────────────────────────────────
+            # ── Video writer ────────────────────────────────────────────────────────────
+            if _vw_init is not None:
+                if not _vw_init["done"]:
+                    h, w = annotated_frame.shape[:2]
+                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                    video_writer = cv2.VideoWriter(
+                        _vw_init["path"], fourcc, 25.0, (w, h)
+                    )
+                    _vw_init["done"] = True
+                    print(f"[Main] Video writer initialised ({w}×{h} @ 25 fps)")
+                if video_writer and video_writer.isOpened():
+                    video_writer.write(annotated_frame)
+
+            # ── Preview ─────────────────────────────────────────────────────────────────
             if show_preview:
                 cv2.imshow("Fire Tracker — GPS", annotated_frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -370,9 +449,13 @@ def run(drone: DroneInterface, show_preview: bool = True) -> None:
     finally:
         drone.close()
         logger.close()
+        if video_writer:
+            video_writer.release()
+            print("[Main] Annotated video saved.")
         if show_preview:
             cv2.destroyAllWindows()
         print(f"[Main] Done — {frame_idx} frames processed.")
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -384,8 +467,23 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
-        "--source", choices=["mavlink", "video", "dji"], default="video",
+        "--source", choices=["mavlink", "video", "dji-log"], default="video",
         help="Data source",
+    )
+    p.add_argument(
+        "--log", default=None,
+        help="Flight-record telemetry CSV or DJI GO 4 .txt binary (--source dji-log). "
+             "If a .txt is given the module auto-decodes it to a companion CSV.",
+    )
+
+    p.add_argument(
+        "--video-offset", type=float, default=0.0,
+        help="Video-to-log sync shift in seconds (--source dji-log); "
+             "positive = video starts later in the log",
+    )
+    p.add_argument(
+        "--camera", choices=sorted(CAMERA_PROFILES), default="default",
+        help="Camera intrinsics profile",
     )
     p.add_argument(
         "--connect", default="udp:127.0.0.1:14550",
@@ -414,7 +512,11 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Mock drone yaw   deg (video mode)")
     p.add_argument("--no-preview", action="store_true",
                    help="Disable OpenCV preview window")
+    p.add_argument("--save-video", action="store_true",
+                   help="Save annotated video to data/vision_check/ with a "
+                        "timestamped filename (never overwrites existing files)")
     return p
+
 
 
 if __name__ == "__main__":
@@ -425,8 +527,15 @@ if __name__ == "__main__":
             connection_string=args.connect,
             video_src=args.video_src,
         )
-    elif args.source == "dji":
-        drone = DJIInterface()
+    elif args.source == "dji-log":
+        if not args.log:
+            sys.exit("--source dji-log requires --log <flight_record.csv> "
+                     "(export the DJI GO 4 .txt with dji-log-parser)")
+        drone = DJILogInterface(
+            video_path=args.video,
+            log_csv_path=args.log,
+            video_offset_s=args.video_offset,
+        )
     else:
         mock_telem = DroneTelemetry(
             lat=args.lat, lon=args.lon, alt_agl=args.alt,
@@ -434,4 +543,7 @@ if __name__ == "__main__":
         )
         drone = VideoFileInterface(args.video, mock_telemetry=mock_telem)
 
-    run(drone, show_preview=not args.no_preview)
+    run(drone, show_preview=not args.no_preview,
+        intrinsics=CAMERA_PROFILES[args.camera],
+        save_video=args.save_video)
+

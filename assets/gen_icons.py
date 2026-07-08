@@ -533,6 +533,72 @@ def icon_moon():
     save(img, "moon")
 
 
+# ── New icons: drone and route/trajectory ─────────────────────────────────────────────
+
+def icon_drone():
+    """Quadcopter viewed from above: cross body + 4 rotors + camera dot."""
+    img = canvas()
+    d = ImageDraw.Draw(img)
+    cx, cy = S // 2, S // 2
+    arm = 72
+    rotor_r = 48
+    body_r  = 28
+    w2 = 10
+    ac = TEAL
+    for angle in (45, 135, 225, 315):
+        rad = math.radians(angle)
+        ex = cx + arm * math.cos(rad)
+        ey = cy + arm * math.sin(rad)
+        stroke(d, [(cx, cy), (ex, ey)], ac, width=w2)
+        circle(d, ex, ey, rotor_r, ac, width=9)
+    dot(d, cx, cy, body_r, ac)
+    dot(d, cx, cy, 12, (30, 30, 46, 255))
+    save(img, "drone")
+
+
+def icon_route():
+    """Drone flight path: dashed line + waypoint dots + arrowhead."""
+    img = canvas()
+    d = ImageDraw.Draw(img)
+    rc = BLUE
+    dot_r = 14
+    pts = [(40, 200), (80, 160), (128, 128), (176, 96), (216, 60)]
+    dash_len, gap_len = 18, 12
+    drawing, budget = True, 0.0
+    for i in range(len(pts) - 1):
+        x0, y0 = pts[i]
+        x1, y1 = pts[i + 1]
+        seg_len = math.hypot(x1 - x0, y1 - y0)
+        dist = 0.0
+        while dist < seg_len:
+            if budget <= 0:
+                drawing = not drawing
+                budget = dash_len if drawing else gap_len
+            step = min(seg_len - dist, budget)
+            frac_s = dist / seg_len
+            frac_e = (dist + step) / seg_len
+            if drawing:
+                stroke(d,
+                       [(x0 + frac_s*(x1-x0), y0 + frac_s*(y1-y0)),
+                        (x0 + frac_e*(x1-x0), y0 + frac_e*(y1-y0))],
+                       rc, width=14)
+            dist += step
+            budget -= step
+    last, prev = pts[-1], pts[-2]
+    angle = math.atan2(last[1]-prev[1], last[0]-prev[0])
+    hs = 32
+    tip = last
+    bl = (tip[0]-hs*math.cos(angle)+hs*0.45*math.sin(angle),
+          tip[1]-hs*math.sin(angle)-hs*0.45*math.cos(angle))
+    br = (tip[0]-hs*math.cos(angle)-hs*0.45*math.sin(angle),
+          tip[1]-hs*math.sin(angle)+hs*0.45*math.cos(angle))
+    d.polygon([tip, bl, br], fill=rc)
+    for p in pts[:-1]:
+        dot(d, p[0], p[1], dot_r, rc)
+        dot(d, p[0], p[1], dot_r//2, (30, 30, 46, 200))
+    save(img, "route")
+
+
 if __name__ == "__main__":
     icon_flame()
     icon_ash()
@@ -575,4 +641,104 @@ if __name__ == "__main__":
     icon_play()
     icon_sun()
     icon_moon()
+    icon_drone()
+    icon_route()
     print("ALL ICONS GENERATED")
+
+
+# ── New icons: drone and route/trajectory ─────────────────────────────────────
+
+def icon_drone():
+    """Quadcopter viewed from above: cross body + 4 rotors + camera dot."""
+    img = canvas()
+    d = ImageDraw.Draw(img)
+    cx, cy = S // 2, S // 2
+    arm = 72          # arm half-length from centre
+    rotor_r = 48      # rotor circle radius
+    body_r  = 28      # central hub radius
+    w2 = 10           # thin arm stroke
+
+    # Arm colour: sky-blue TEAL
+    ac = TEAL
+    # 4 arms at 45°
+    for angle in (45, 135, 225, 315):
+        rad = math.radians(angle)
+        ex = cx + arm * math.cos(rad)
+        ey = cy + arm * math.sin(rad)
+        stroke(d, [(cx, cy), (ex, ey)], ac, width=w2)
+        # Rotor circle
+        circle(d, ex, ey, rotor_r, ac, width=9)
+
+    # Central body hub (filled circle)
+    dot(d, cx, cy, body_r, ac)
+    # Camera dot (lens) — tiny dark circle inside hub
+    dot(d, cx, cy, 12, (30, 30, 46, 255))
+
+    save(img, "drone")
+
+
+def icon_route():
+    """Drone flight path: curved dashed line with waypoint dots + arrowhead."""
+    img = canvas()
+    d = ImageDraw.Draw(img)
+    # Route colour: BLUE
+    rc = BLUE
+    dot_r = 14
+
+    # Control points for a gentle S-curve (Bézier approximated as polyline)
+    pts = [
+        (40,  200),
+        (80,  160),
+        (128, 128),
+        (176,  96),
+        (216,  60),
+    ]
+
+    # Draw dashed polyline: alternate filled/gap segments
+    dash_len = 18
+    gap_len  = 12
+    segment_pts = []
+    t = 0.0
+    drawing = True
+    budget = 0.0
+
+    for i in range(len(pts) - 1):
+        x0, y0 = pts[i]
+        x1, y1 = pts[i + 1]
+        seg_len = math.hypot(x1 - x0, y1 - y0)
+        dist = 0.0
+        while dist < seg_len:
+            if budget <= 0:
+                drawing = not drawing
+                budget = dash_len if drawing else gap_len
+            step = min(seg_len - dist, budget)
+            frac_s = dist / seg_len
+            frac_e = (dist + step) / seg_len
+            sx = x0 + frac_s * (x1 - x0)
+            sy = y0 + frac_s * (y1 - y0)
+            ex = x0 + frac_e * (x1 - x0)
+            ey = y0 + frac_e * (y1 - y0)
+            if drawing:
+                stroke(d, [(sx, sy), (ex, ey)], rc, width=14)
+            dist += step
+            budget -= step
+
+    # Arrowhead at the last point
+    last = pts[-1]
+    prev = pts[-2]
+    angle = math.atan2(last[1] - prev[1], last[0] - prev[0])
+    hs = 32   # arrowhead half-size
+    tip = last
+    bl = (tip[0] - hs * math.cos(angle) + hs * 0.45 * math.sin(angle),
+          tip[1] - hs * math.sin(angle) - hs * 0.45 * math.cos(angle))
+    br = (tip[0] - hs * math.cos(angle) - hs * 0.45 * math.sin(angle),
+          tip[1] - hs * math.sin(angle) + hs * 0.45 * math.cos(angle))
+    d.polygon([tip, bl, br], fill=rc)
+
+    # Waypoint dots along the route
+    for p in pts[:-1]:
+        dot(d, p[0], p[1], dot_r, rc)
+        dot(d, p[0], p[1], dot_r // 2, (30, 30, 46, 200))
+
+    save(img, "route")
+

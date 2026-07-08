@@ -1063,6 +1063,7 @@
     <button class="rail-btn" id="rb-memory"    onclick="toggleDrawer('memory')"    title="Microclimate Memory"><img class='icon' src='assets/icons/brain.png' alt=''><span class="rail-badge"></span></button>
     <button class="rail-btn" id="rb-events"    onclick="toggleDrawer('events')"    title="Fire Events"><img class='icon icon-neutral' src='assets/icons/clipboard-list.png' alt=''><span class="rail-badge"></span></button>
     <button class="rail-btn" id="rb-advisor"   onclick="toggleDrawer('advisor')"   title="Threat Advisor"><img class='icon' src='assets/icons/map-pin.png' alt=''><span class="rail-badge"></span></button>
+    <button class="rail-btn" id="rb-drone"     onclick="toggleDrawer('drone')"     title="Drone Telemetry"><img class='icon' src='assets/icons/drone.png' alt=''><span class="rail-badge"></span></button>
     <div class="rail-spacer"></div>
     <button class="rail-btn" id="rb-theme" onclick="toggleTheme()" title="Toggle light/dark theme"><img class='icon' id="theme-icon" src='assets/icons/moon.png' alt=''></button>
     <button class="rail-btn" id="rb-dbg" onclick="toggleDbg()" title="Debug log (`)"><img class='icon' src='assets/icons/bug.png' alt=''></button>
@@ -1375,6 +1376,30 @@
       <div class="sect-label" style="margin-top:10px"><img class='icon' src='assets/icons/corner-up-right.png' alt=''> Escape routes</div>
       <div id="advisor-routes"><div class="adv-empty">None yet.</div></div>
     </div><!-- /pane-advisor -->
+
+    <div class="drawer-pane" id="pane-drone">
+      <div style="font-size:10px;color:var(--ctp-surface2);margin-bottom:8px;line-height:1.4">
+        Extract ignition coordinates from YOLO detections and visualize drone flight paths using raw DJI telemetry logs.
+      </div>
+      <div class="sect-label"><img class='icon' src='assets/icons/drone.png' alt=''> Telemetry Loader</div>
+      
+      <div id="drone-gps-panel" style="background:rgba(0,180,255,0.08);border:1px solid rgba(0,180,255,0.25);border-radius:6px;padding:7px 9px;margin-bottom:7px;">
+        <div style="font-size:10px;color:var(--ctp-blue,#89b4fa);font-weight:600;margin-bottom:5px;">🛸 Drone Detection GPS</div>
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">
+          <label style="font-size:10px;color:var(--ctp-text,#cdd6f4);white-space:nowrap;">Min confidence</label>
+          <input type="range" id="drone-gps-conf" min="0.05" max="1" step="0.05" value="0.3"
+                 style="flex:1;height:4px;" oninput="document.getElementById('drone-gps-conf-val').textContent=parseFloat(this.value).toFixed(2)">
+          <span id="drone-gps-conf-val" style="font-size:10px;color:var(--ctp-blue,#89b4fa);min-width:26px;">0.30</span>
+        </div>
+        <button class="btn" id="btn-load-drone-gps" onclick="loadDroneGPS()" style="width:100%;font-size:11px;">
+          <img class='icon' src='assets/icons/target.png' style='height:11px'> Load Detections
+        </button>
+        <button class="btn" id="btn-load-drone-traj" onclick="loadDroneTrajectory()" style="width:100%;font-size:11px;margin-top:4px;">
+          <img class='icon' src='assets/icons/route.png' style='height:11px'> Load Flight Path
+        </button>
+        <div id="drone-gps-status" style="font-size:9px;color:var(--ctp-surface2);margin-top:4px;"></div>
+      </div>
+    </div><!-- /pane-drone -->
 
     </div><!-- /drawer-body -->
     <div id="drawer-footer">
@@ -1703,7 +1728,7 @@
     var _drawerTitles = { setup: "Setup & Weather", tools: "Tools",
                           optimizer: "Optimizer", hindcast: "Hindcast Validation",
                           memory: "Microclimate Memory", events: "Fire Events",
-                          advisor: "Threat Advisor" };
+                          advisor: "Threat Advisor", drone: "Drone Telemetry" };
 
     function openDrawer(name) {
       if (!_drawerTitles[name]) return;
@@ -1949,11 +1974,14 @@
     var SRC_ADVISOR_SUGG   = "advisor-sugg-src";
 
     function _setupMapLayers() {
-      ["truck", "map-pin"].forEach(function (name) {
+      ["truck", "map-pin", "drone", "route"].forEach(function (name) {
         map.loadImage("assets/icons/" + name + ".png", function (err, image) {
           if (!err && !map.hasImage(name)) map.addImage(name, image);
         });
       });
+      map.addSource("drone-trajectory-src", { type: "geojson", data: emptyFC() });
+      map.addSource("drone-waypoints-src",  { type: "geojson", data: emptyFC() });
+
       map.addSource(SRC_IGNITE,     { type: "geojson", data: emptyFC() });
       map.addSource(SRC_WATER,      { type: "geojson", data: emptyFC() });
       map.addSource(SRC_CONTAINMENT,{ type: "geojson", data: emptyFC() });
@@ -2086,6 +2114,29 @@
         id: "water-outline", type: "line", source: SRC_WATER,
         paint: { "line-color": "#89dceb", "line-width": 0.8, "line-opacity": 0.5 },
       });
+
+      // ── Drone Trajectory Layers ─────────────────────────────────────────────
+      map.addLayer({
+        id: "drone-trajectory-line", type: "line", source: "drone-trajectory-src",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#89dceb", "line-width": 2, "line-opacity": 0.7,
+          "line-dasharray": [2, 2]
+        }
+      });
+      map.addLayer({
+        id: "drone-waypoints-markers", type: "symbol", source: "drone-waypoints-src",
+        layout: {
+          "icon-image": ["get", "icon"],
+          "icon-size":  0.4,
+          "icon-allow-overlap": true,
+          "icon-rotate": ["get", "heading"],
+          "icon-rotation-alignment": "map",
+          "symbol-placement": "point",
+        },
+        paint: { "icon-opacity": 0.9 }
+      });
+
 
       // ── Ground-truth mask layers ──────────────────────────────────────────
       map.addSource(SRC_MASK,      { type: "geojson", data: emptyFC() });
@@ -2823,6 +2874,190 @@
         document.getElementById("btn-clear-mask").style.display = "block";
         setStatus("Mask vertex " + maskPoints.length + " added. Click 'Close Polygon' when done.", "info");
       }
+    }
+
+    // ── Drone Trajectory Loader ────────────────────────────────────────────────
+    function loadDroneTrajectory() {
+      var statusEl = document.getElementById("drone-gps-status");
+      var btn      = document.getElementById("btn-load-drone-traj");
+
+      statusEl.textContent = "Fetching flight2.csv …";
+      btn.disabled = true;
+
+      fetch("http://localhost:8000/drone/data/flight2.csv", { cache: "no-store" })
+        .then(function(r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.text();
+        })
+        .then(function(csv) {
+          var lines = csv.trim().split(/\r?\n/);
+          if (lines.length < 2) throw new Error("CSV is empty");
+
+          var headers = lines[0].split(",").map(function(h){ return h.trim(); });
+          var iLat = headers.indexOf("OSD.latitude");
+          var iLon = headers.indexOf("OSD.longitude");
+          var iYaw = headers.indexOf("OSD.yaw");
+          
+          if (iLat < 0 || iLon < 0) throw new Error("Missing OSD.latitude / OSD.longitude");
+
+          var coords = [];
+          var waypoints = [];
+          
+          // Subsample to avoid drawing 6000 drones (e.g. 1 per 100 rows)
+          var step = Math.max(1, Math.floor((lines.length - 1) / 30));
+
+          for (var i = 1; i < lines.length; i++) {
+            var cols = lines[i].split(",");
+            if (cols.length <= Math.max(iLat, iLon)) continue;
+            var lat = parseFloat(cols[iLat]);
+            var lon = parseFloat(cols[iLon]);
+            var yaw = iYaw >= 0 ? parseFloat(cols[iYaw]) : 0;
+            
+            if (isNaN(lat) || isNaN(lon) || Math.abs(lat) < 0.001) continue;
+            
+            coords.push([lon, lat]);
+            
+            // Add a drone icon every 'step' rows
+            if (i % step === 0 || i === lines.length - 1) {
+              waypoints.push({
+                type: "Feature",
+                geometry: { type: "Point", coordinates: [lon, lat] },
+                properties: { icon: "drone", heading: yaw }
+              });
+            }
+          }
+
+          if (coords.length < 2) {
+            statusEl.textContent = "No valid trajectory found.";
+            btn.disabled = false;
+            return;
+          }
+
+          // Update line source
+          map.getSource("drone-trajectory-src").setData({
+            type: "FeatureCollection",
+            features: [{ type: "Feature", geometry: { type: "LineString", coordinates: coords } }]
+          });
+
+          // Update waypoints source
+          map.getSource("drone-waypoints-src").setData({
+            type: "FeatureCollection",
+            features: waypoints
+          });
+
+          // Fly to trajectory
+          var cLat = coords.reduce(function(s, c) { return s + c[1]; }, 0) / coords.length;
+          var cLon = coords.reduce(function(s, c) { return s + c[0]; }, 0) / coords.length;
+          map.flyTo({ center: [cLon, cLat], zoom: 15, duration: 1200 });
+
+          statusEl.style.color = "var(--ctp-green, #a6e3a1)";
+          statusEl.textContent = "\u2713 Loaded flight path (" + coords.length + " pts)";
+          btn.disabled = false;
+        })
+        .catch(function(err) {
+          statusEl.style.color = "var(--ctp-red, #f38ba8)";
+          statusEl.textContent = "\u2717 " + err.message;
+          console.error("[DroneTraj]", err);
+          btn.disabled = false;
+        });
+    }
+
+    // ── Drone GPS log loader ───────────────────────────────────────────────────
+    function loadDroneGPS() {
+      var statusEl = document.getElementById("drone-gps-status");
+      var minConf  = parseFloat(document.getElementById("drone-gps-conf").value) || 0.3;
+      var btn      = document.getElementById("btn-load-drone-gps");
+
+      statusEl.textContent = "Fetching fire_gps_log.csv …";
+      btn.disabled = true;
+
+      // The HTTP server (port 8000) serves everything under Fire_Project/
+      fetch("http://localhost:8000/drone/data/fire_gps_log.csv", { cache: "no-store" })
+        .then(function(r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.text();
+        })
+        .then(function(csv) {
+          var lines = csv.trim().split(/\r?\n/);
+          if (lines.length < 2) throw new Error("CSV is empty");
+
+          // Parse header
+          var headers = lines[0].split(",").map(function(h){ return h.trim(); });
+          var iLat  = headers.indexOf("fire_lat");
+          var iLon  = headers.indexOf("fire_lon");
+          var iConf = headers.indexOf("confidence");
+          if (iLat < 0 || iLon < 0) throw new Error("CSV missing fire_lat/fire_lon columns");
+
+          // Parse rows above confidence threshold
+          var pts = [];
+          for (var i = 1; i < lines.length; i++) {
+            var cols = lines[i].split(",");
+            if (cols.length <= Math.max(iLat, iLon, iConf)) continue;
+            var lat  = parseFloat(cols[iLat]);
+            var lon  = parseFloat(cols[iLon]);
+            var conf = iConf >= 0 ? parseFloat(cols[iConf]) : 1.0;
+            if (isNaN(lat) || isNaN(lon) || isNaN(conf)) continue;
+            if (Math.abs(lat) < 0.001 || Math.abs(lon) < 0.001) continue; // skip 0,0
+            if (conf < minConf) continue;
+            pts.push({ lat: lat, lng: lon, conf: conf });
+          }
+
+          if (!pts.length) {
+            statusEl.textContent = "No detections above conf=" + minConf.toFixed(2) + ".";
+            btn.disabled = false;
+            return;
+          }
+
+          // Spatial cluster: merge detections within ~50 m of each other
+          var CLUSTER_DEG = 50 / 111320; // ~50 m in degrees
+          var clusters = [];
+          pts.forEach(function(p) {
+            var merged = false;
+            for (var c = 0; c < clusters.length; c++) {
+              var dlat = p.lat - clusters[c].lat;
+              var dlon = p.lng - clusters[c].lng;
+              if (Math.sqrt(dlat*dlat + dlon*dlon) < CLUSTER_DEG) {
+                // Keep highest-confidence representative
+                if (p.conf > clusters[c].conf) {
+                  clusters[c].lat  = p.lat;
+                  clusters[c].lng  = p.lng;
+                  clusters[c].conf = p.conf;
+                }
+                merged = true;
+                break;
+              }
+            }
+            if (!merged) clusters.push({ lat: p.lat, lng: p.lng, conf: p.conf });
+          });
+
+          // Add to ignitionPoints
+          var added = 0;
+          clusters.forEach(function(c) {
+            ignitionPoints.push({ lat: c.lat, lng: c.lng });
+            added++;
+          });
+
+          refreshIgnList();
+          redrawIgnition();
+
+          // Fly map to the centroid of loaded points
+          if (added > 0 && typeof map !== "undefined") {
+            var cLat = clusters.reduce(function(s,c){ return s+c.lat; }, 0) / clusters.length;
+            var cLng = clusters.reduce(function(s,c){ return s+c.lng; }, 0) / clusters.length;
+            map.flyTo({ center: [cLng, cLat], zoom: Math.max(map.getZoom(), 13), duration: 1200 });
+          }
+
+          statusEl.style.color = "var(--ctp-green, #a6e3a1)";
+          statusEl.textContent = "\u2713 Loaded " + added + " cluster(s) from " + pts.length +
+                                 " detection(s) (conf \u2265 " + minConf.toFixed(2) + ")";
+          btn.disabled = false;
+        })
+        .catch(function(err) {
+          statusEl.style.color = "var(--ctp-red, #f38ba8)";
+          statusEl.textContent = "\u2717 " + err.message;
+          console.error("[DroneGPS]", err);
+          btn.disabled = false;
+        });
     }
 
     function refreshIgnList() {
