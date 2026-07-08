@@ -92,7 +92,6 @@ Fire_Project-main/
 ├── server.py                ← WebSocket simulation server for sandbox UI
 ├── sandbox.html             ← Interactive browser sandbox (MapLibre + controls)
 ├── config.py                ← Global constants (grid, dt, Rothermel tuning)
-├── api_key.txt              ← OpenTopography API key
 │
 ├── air/                     ← Wind field solver (standalone package)
 │   ├── air.py               ← compute_wind_field(): WAF + upslope + Poisson
@@ -121,7 +120,7 @@ Fire_Project-main/
 │   │   ├── main.py          ← Drone pipeline entry point
 │   │   ├── vision.py        ← YOLOv8 fire detection on video frames
 │   │   └── geometry.py      ← GPS ↔ pixel coordinate transforms
-│   └── data/                ← YOLOv8 weights + test footage
+│   └── data/                ← YOLOv8 weights (fire_yolov8n.pt) + test footage (test2.mp4)
 │
 ├── tools/                   ← Dev/testing utilities (not part of main pipeline)
 │   ├── simulation.py        ← Synthetic-terrain simulation runner
@@ -812,7 +811,7 @@ The Comparison tab overlays the FIRED daily perimeter for the matching time wind
 | `drone/src/geometry.py` | GPS ↔ pixel coordinate transforms (camera intrinsics, drone altitude, NED coordinates) |
 | `drone/src/main.py` | Full drone pipeline: video + telemetry → fire GPS footprint |
 | `drone/fire_tracker.py` | Extracts fire GPS centroid from drone video + telemetry for injection into the CA |
-| `drone/data/` | YOLOv8 weights (`best.pt`, `fire_yolov8n.pt`) and test footage |
+| `drone/data/` | YOLOv8 weights (`fire_yolov8n.pt`) and test footage (`test2.mp4`) |
 
 The geometry module solves the ray-casting problem: given a pixel location in the camera frame and the drone's GPS + attitude (roll, pitch, yaw, altitude), project the ray to the ground plane and return the GPS coordinates of the fire pixel.
 
@@ -839,10 +838,20 @@ At runtime `apply_weather_to_landscape()` overwrites the config scalars and call
 
 ## 14. API Keys
 
-| Service | Key location | Notes |
-|---------|-------------|-------|
-| OpenTopography (COP30) | `api_key.txt` | Free academic key — register at opentopography.org |
+No keys are committed to this repo. Set your own before running the pipeline:
+
+| Service | How to set it | Notes |
+|---------|---------------|-------|
+| OpenTopography (COP30) | `OPENTOPO_API_KEY` env var | Free academic key — register at opentopography.org/requestApiKey |
 | NASA FIRMS | GUI "API Key" field or `--map-key` CLI arg | Free — register at firms.modaps.eosdis.nasa.gov/api |
+
+```bash
+# macOS/Linux
+export OPENTOPO_API_KEY="your-key-here"
+
+# Windows (PowerShell)
+$env:OPENTOPO_API_KEY = "your-key-here"
+```
 
 ---
 

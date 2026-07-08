@@ -1426,7 +1426,10 @@ async def _handle(websocket):
             current_hour      = int(simulated_minutes // 60)
             if current_hour != last_hour and df_hourly is not None and len(df_hourly) > 0:
                 last_hour = current_hour
-                h_idx = min(current_hour, len(df_hourly) - 1)
+                # df_hourly is indexed from 00:00 UTC of date_start — offset by
+                # the ignition hour so "hour 0 of the sim" maps to the actual
+                # ignition time instead of always re-anchoring at midnight.
+                h_idx = min(int(ignition_wall_hour) + current_hour, len(df_hourly) - 1)
                 hrow  = df_hourly.iloc[h_idx]
                 w_upd = {
                     "wind_speed_ms":    float(hrow.wind_speed_ms),

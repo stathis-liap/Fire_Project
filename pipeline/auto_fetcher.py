@@ -10,7 +10,7 @@ on real terrain instead of synthetic hills:
   3. ESRI World Imagery  → High-res satellite texture (for visualizer_3d.py)
   4. CORINE Land Cover    → EU vegetation/land-use map for fuel-type assignment
 
-API key (OpenTopography / Copernicus COP30):  57314bc7ed85882904a7485d77c0dbe5
+API key (OpenTopography / Copernicus COP30): set the OPENTOPO_API_KEY env var.
 Register or renew at:  https://portal.opentopography.org/requestApiKey
 """
 
@@ -20,8 +20,8 @@ import os
 import requests
 import numpy as np
 
-# Default Copernicus/OpenTopography API key
-_DEFAULT_API_KEY = "57314bc7ed85882904a7485d77c0dbe5"
+# OpenTopography/Copernicus API key — set via env var, never hardcode here.
+_DEFAULT_API_KEY = os.environ.get("OPENTOPO_API_KEY", "")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

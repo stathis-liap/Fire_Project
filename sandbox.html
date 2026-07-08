@@ -759,7 +759,7 @@
 
     /* ── Vegetation legend ───────────────────────────────────────────────── */
     #veg-legend {
-      position: absolute; bottom: 64px; left: 50%;
+      position: absolute; bottom: 128px; left: 50%;
       transform: translateX(-50%);
       display: none; flex-wrap: wrap; gap: 4px;
       max-width: 600px; justify-content: center;
@@ -1106,12 +1106,12 @@
     </div>
     <div class="row">
       <label>Date (hourly wx)</label>
-      <input type="date" id="date-start" />
+      <input type="date" id="date-start" onchange="_previewDateWeather()" />
       <span class="unit"></span>
     </div>
     <div class="row">
       <label>Ignition time</label>
-      <input type="time" id="ignition-time" value="14:00" />
+      <input type="time" id="ignition-time" value="14:00" onchange="_previewDateWeather()" />
       <span class="unit">UTC</span>
     </div>
     </div><!-- /pane-setup -->
@@ -1879,6 +1879,60 @@
       var el = document.getElementById("status");
       el.textContent = msg;
       el.className   = cls || "info";
+    }
+
+    // ── Live weather preview when a historical date is picked ─────────────────
+    // The Wind/Temp/Humidity fields are otherwise pure manual input with no
+    // link to the Date field — this fetches Open-Meteo directly from the
+    // browser (no key needed, CORS-open) so picking a date visibly updates
+    // them to the real conditions instead of silently doing nothing until Run.
+    var _weatherPreviewSeq = 0;
+    function _previewDateWeather() {
+      var dateVal = document.getElementById("date-start").value;
+      if (!dateVal) return;
+
+      var lat, lon;
+      if (ignitionPoints.length) {
+        lat = ignitionPoints.reduce(function (s, p) { return s + p.lat; }, 0) / ignitionPoints.length;
+        lon = ignitionPoints.reduce(function (s, p) { return s + p.lng; }, 0) / ignitionPoints.length;
+      } else if (typeof map !== "undefined" && map) {
+        var c = map.getCenter();
+        lat = c.lat; lon = c.lng;
+      } else {
+        return;
+      }
+
+      var ignTime = document.getElementById("ignition-time").value || "14:00";
+      var ignHour = parseInt(ignTime.split(":")[0], 10) || 0;
+      var seq = ++_weatherPreviewSeq;
+
+      setStatus("Fetching historical weather for " + dateVal + " ...", "info");
+
+      var url = "https://archive-api.open-meteo.com/v1/archive"
+        + "?latitude=" + lat.toFixed(4) + "&longitude=" + lon.toFixed(4)
+        + "&start_date=" + dateVal + "&end_date=" + dateVal
+        + "&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m"
+        + "&wind_speed_unit=ms";
+
+      fetch(url).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).then(function (data) {
+        if (seq !== _weatherPreviewSeq) return;   // superseded by a newer request
+        var h = data.hourly;
+        if (!h || !h.temperature_2m || !h.temperature_2m.length) {
+          throw new Error("no data for that date yet");
+        }
+        var idx = Math.min(ignHour, h.temperature_2m.length - 1);
+        document.getElementById("wind-speed").value  = h.wind_speed_10m[idx].toFixed(1);
+        document.getElementById("wind-dir").value    = Math.round(h.wind_direction_10m[idx]);
+        document.getElementById("temperature").value = h.temperature_2m[idx].toFixed(1);
+        document.getElementById("humidity").value    = Math.round(h.relative_humidity_2m[idx]);
+        setStatus("Loaded real weather for " + dateVal + " " + ignTime + " UTC.", "ok");
+      }).catch(function (err) {
+        if (seq !== _weatherPreviewSeq) return;
+        setStatus("Couldn't fetch historical weather (" + err.message + ") — using manual values.", "err");
+      });
     }
 
     // ── Simulation loading overlay ────────────────────────────────────────────
@@ -4326,6 +4380,15 @@
         use_microclimate:   useMc,
       };
 
+      // Seed the weather strip with the manually-entered values right away —
+      // see runSimulation() for why this can't wait on hourly weather data.
+      _showWeatherStrip({
+        wind_speed_ms:     initMsg.wind_speed_ms,
+        wind_direction:    initMsg.wind_dir_deg,
+        temperature_c:     initMsg.temperature_c,
+        relative_humidity: initMsg.relative_humidity,
+      });
+
       // Preserve ignition + mask across the ws restart
       var savedIgnPts        = ignitionPoints.map(function(p){ return {lat:p.lat, lng:p.lng}; });
       var savedMaskPts       = maskPoints.slice();
@@ -4569,7 +4632,10 @@
                                msg.lat_min, msg.lat_max, msg.lon_min, msg.lon_max);
         }
         if (msg.hourly_weather && msg.hourly_weather.length > 0) {
-          var hw = msg.hourly_weather[0];
+          // hourly_weather is indexed from 00:00 UTC of the chosen date —
+          // show the ignition hour's entry, not always midnight.
+          var hwIdx = Math.min(Math.floor(_ignitionWallHour), msg.hourly_weather.length - 1);
+          var hw = msg.hourly_weather[hwIdx];
           _showWeatherStrip({
             wind_speed_ms: hw.wind_speed_ms, wind_direction: hw.wind_direction,
             temperature_c: hw.temperature_c, relative_humidity: hw.relative_humidity,
@@ -4722,6 +4788,16 @@
         ignition_time_utc: ignTime,
       };
       if (dateVal) { initMsg.date_start = dateVal; initMsg.date_end = dateVal; }
+
+      // Seed the weather strip with the manually-entered values right away —
+      // it otherwise only updates from historical hourly weather (requires a
+      // date range) and would stay blank for freeform/manual runs.
+      _showWeatherStrip({
+        wind_speed_ms:     initMsg.wind_speed_ms,
+        wind_direction:    initMsg.wind_dir_deg,
+        temperature_c:     initMsg.temperature_c,
+        relative_humidity: initMsg.relative_humidity,
+      });
 
       document.getElementById("btn-run").style.display    = "none";
       document.getElementById("btn-pause").style.display  = "block";

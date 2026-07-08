@@ -1,6 +1,5 @@
 # Map Data, Images, and DBs
 *.tif
-*.png
 *.jpg
 *.npz
 *.geojson
@@ -13,3 +12,16 @@ __pycache__/
 .vscode/
 
 drone/data/
+
+# OS junk
+.DS_Store
+
+# LaTeX build artifacts
+report/*.aux
+report/*.log
+report/*.out
+report/*.toc
+
+# Secrets
+api_key.txt
+.env

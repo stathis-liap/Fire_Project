@@ -66,7 +66,7 @@ from pipeline.auto_fetcher import (
     fetch_satellite_image_by_bounds, fetch_osm_features,
 )
 
-_OPENTOPO_API_KEY = "57314bc7ed85882904a7485d77c0dbe5"
+_OPENTOPO_API_KEY = os.environ.get("OPENTOPO_API_KEY", "")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
