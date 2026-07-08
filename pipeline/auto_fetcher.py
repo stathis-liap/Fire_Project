@@ -654,6 +654,78 @@ def fetch_osm_features(west, south, east, north, output_dir=".", force=False):
     return geojson_path
 
 
+def fetch_osm_places(west, south, east, north, output_dir=".", force=False):
+    """
+    Fetch named settlements (place=city/town/village/hamlet/suburb) from OSM
+    via the Overpass API. Tiny node-only query, cached by bbox.
+
+    Returns the path to a GeoJSON FeatureCollection of Point features with
+    properties {name, place, population}, or None if unreachable.
+    """
+    import json
+
+    tag          = f"{west:.2f}_{south:.2f}_{east:.2f}_{north:.2f}"
+    geojson_path = os.path.join(output_dir, f"osm_places_{tag}.geojson")
+
+    if not force and os.path.exists(geojson_path):
+        print(f"[Fetcher] Using cached OSM places '{geojson_path}'")
+        return geojson_path
+
+    print("[Fetcher] Fetching OSM settlements (Overpass API) ...")
+    query = (
+        f"[out:json][timeout:60][bbox:{south},{west},{north},{east}];\n"
+        "node[place~\"^(city|town|village|hamlet|suburb)$\"];\n"
+        "out;"
+    )
+
+    overpass_endpoints = [
+        "https://overpass-api.de/api/interpreter",
+        "https://lz4.overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+    ]
+    _headers = {"Accept": "*/*", "User-Agent": "Project-WILSON/1.0 (+local)"}
+
+    raw_data = None
+    for endpoint in overpass_endpoints:
+        try:
+            resp = requests.post(endpoint, data={"data": query},
+                                 headers=_headers, timeout=90)
+            resp.raise_for_status()
+            raw_data = resp.json()
+            break
+        except Exception as exc:
+            print(f"[Fetcher]   {endpoint} → {exc}")
+
+    if raw_data is None:
+        print("[Fetcher] WARNING — Overpass unreachable; settlement layer skipped.")
+        return None
+
+    features = []
+    for elem in raw_data.get("elements", []):
+        if elem.get("type") != "node":
+            continue
+        tags = elem.get("tags", {})
+        name = tags.get("name:en") or tags.get("name") or ""
+        if not name:
+            continue
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point",
+                         "coordinates": [elem["lon"], elem["lat"]]},
+            "properties": {
+                "name":       name,
+                "place":      tags.get("place", ""),
+                "population": tags.get("population", ""),
+            },
+        })
+
+    geojson = {"type": "FeatureCollection", "features": features}
+    with open(geojson_path, "w") as fh:
+        json.dump(geojson, fh)
+    print(f"[Fetcher] OSM places: {len(features)} settlements → '{geojson_path}'")
+    return geojson_path
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 5.  Master Orchestrator  — single call to prepare a full simulation
 # ──────────────────────────────────────────────────────────────────────────────

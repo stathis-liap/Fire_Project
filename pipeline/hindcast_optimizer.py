@@ -740,6 +740,17 @@ class HindcastOptimizer:
         ERA5 wind direction has systematic biases over complex Mediterranean
         terrain due to its 0.25° resolution — this parameter absorbs that error
         and lets the optimizer recover the dominant orographic channelling.
+
+    params[3] : ignition_threshold  ∈ [0.15, 1.0]
+        Heat accumulation a cell needs before it ignites. Lower = the front
+        advances on less accumulated heat (faster, more persistent fire).
+        Without this the CA fire often self-extinguishes long before the
+        hindcast window ends, capping IoU regardless of wind/moisture.
+
+    params[4] : burn_time_mult  ∈ [1.0, 5.0]
+        Multiplier on the per-cell burn duration (BURN_TIME_STEPS). Longer
+        burning cells keep feeding heat to the front, controlling fire
+        persistence — the main failure mode of the fixed-physics model.
     """
 
     def __init__(
@@ -750,6 +761,7 @@ class HindcastOptimizer:
         hindcast_steps:   int,
         ignition_rcs:     list,   # list of (row, col) tuples — one per ignition seed
         eval_callback     = None,
+        seed_mask:        np.ndarray | None = None,
     ):
         self.base_landscape  = base_landscape
         self.base_moisture   = base_landscape.moisture.copy()
@@ -760,6 +772,10 @@ class HindcastOptimizer:
         self.hindcast_steps  = hindcast_steps
         self.ignition_rcs    = ignition_rcs   # list of (row, col)
         self.eval_callback   = eval_callback
+        # Perimeter assimilation: when given, the CA is seeded from the
+        # observed cumulative fire perimeter (FARSITE-style validation)
+        # instead of point ignitions.
+        self.seed_mask       = seed_mask
 
         self._eval_count   = 0
         self._best_error   = float("inf")
@@ -792,6 +808,8 @@ class HindcastOptimizer:
         moisture_offset  = float(params[0])
         wind_mult        = float(params[1])
         wind_dir_offset  = float(params[2]) if len(params) > 2 else 0.0
+        ign_threshold    = float(params[3]) if len(params) > 3 else 1.0
+        burn_time_mult   = float(params[4]) if len(params) > 4 else 1.0
 
         # ── Mutate landscape ──────────────────────────────────────────
         # We work on the shared landscape object.  Because CellularAutomata
@@ -811,16 +829,26 @@ class HindcastOptimizer:
         fire_sim = CellularAutomataFire(self.base_landscape, config)
         rows, cols = self.base_landscape.shape
 
-        # Ignite a small radius around each ignition seed cell.
-        # The radius accounts for the ~375 m VIIRS pixel footprint; each
-        # FIRED centroid maps to one polygon centroid in the FIRED dataset.
-        radius = max(1, int(375 / config.CELL_SIZE_METERS / 2))
-        for (r0, c0) in self.ignition_rcs:
-            for dr in range(-radius, radius + 1):
-                for dc in range(-radius, radius + 1):
-                    rr, cc = r0 + dr, c0 + dc
-                    if 0 <= rr < rows and 0 <= cc < cols:
-                        fire_sim.ignite(rr, cc)
+        # Fire-persistence parameters (must be set BEFORE igniting so the
+        # seeds' burn timers pick up the scaled duration)
+        fire_sim._ignition_threshold = ign_threshold
+        fire_sim._burn_time_steps    = max(
+            1, int(round(fire_sim._burn_time_steps * burn_time_mult)))
+
+        if self.seed_mask is not None:
+            # Perimeter assimilation: light the whole observed perimeter
+            fire_sim.ignite_region(self.seed_mask)
+        else:
+            # Ignite a small radius around each ignition seed cell.
+            # The radius accounts for the ~375 m VIIRS pixel footprint; each
+            # FIRED centroid maps to one polygon centroid in the FIRED dataset.
+            radius = max(1, int(375 / config.CELL_SIZE_METERS / 2))
+            for (r0, c0) in self.ignition_rcs:
+                for dr in range(-radius, radius + 1):
+                    for dc in range(-radius, radius + 1):
+                        rr, cc = r0 + dr, c0 + dc
+                        if 0 <= rr < rows and 0 <= cc < cols:
+                            fire_sim.ignite(rr, cc)
 
         # ── Step forward for hindcast_steps ───────────────────────────
         for _ in range(self.hindcast_steps):
@@ -835,6 +863,11 @@ class HindcastOptimizer:
             (fire_sim.state >= 1) |
             (fire_sim.ignition_fraction >= 0.5)
         )
+        if self.seed_mask is not None:
+            # The assimilated perimeter is observed burned area — always
+            # part of the cumulative prediction (ignite_region skips
+            # non-combustible cells inside it, which are still "burned").
+            predicted_mask |= self.seed_mask
 
         # ── Score ─────────────────────────────────────────────────────
         error = compute_error(
@@ -854,6 +887,7 @@ class HindcastOptimizer:
             f"  eval={self._eval_count:4d}  error={error:.4f}  "
             f"best={self._best_error:.4f}  "
             f"Δm={moisture_offset:+.3f}  k_wind={wind_mult:.2f}  "
+            f"thr={ign_threshold:.2f}  bt×{burn_time_mult:.2f}  "
             f"{elapsed:.0f}s{tag}",
             flush=True,
         )
@@ -950,6 +984,7 @@ def run_hindcast(
     ignition_day:    int   = 1,
     ignition_lat_override: Optional[float] = None,
     ignition_lon_override: Optional[float] = None,
+    assimilate_perimeter: bool = True,
 ) -> dict:
     """
     Full end-to-end hindcast assimilation pipeline.
@@ -974,6 +1009,12 @@ def run_hindcast(
     ignition_day    : 1-indexed FIRED day to seed ignition from.  Day 1 = first
                       satellite detection (default).  Day 2+ uses that day's
                       polygon centroids, useful for studying later-stage spread.
+    assimilate_perimeter : FIRED mode only. When True (default), seed the CA
+                      from the observed cumulative perimeter through
+                      `ignition_day` (FARSITE/FlamMap-style validation) and
+                      score the cumulative extent at the end of the window.
+                      When False, seed from polygon-centroid points only
+                      (tests pure from-ignition skill; much harder).
 
     Truth source priority: Copernicus shapefile > FIRED GeoPackage > NASA FIRMS.
 
@@ -988,6 +1029,7 @@ def run_hindcast(
     ignition_date = date_start
     fired_timeline = None   # full timeline for GUI day-selector overlay
     fired_truth_window = None  # day-limited slice used for evaluation scoring
+    seed_mask_coarse = None    # perimeter-assimilation seed (FIRED mode only)
 
     using_shapefile = truth_shapefile is not None and os.path.exists(str(truth_shapefile))
     using_fired     = (
@@ -1064,6 +1106,7 @@ def run_hindcast(
         else:
             _seed_date_str = date_start
         ignition_time = pd.Timestamp(_seed_date_str + " 00:00:00", tz="UTC")
+        ignition_date = _seed_date_str   # weather must match the seed day, not date_start
         print(f"  Ignition time (day {_day_idx + 1})  : {ignition_time}")
     else:
         print("\n[1/7] Fetching NASA FIRMS VIIRS data ...")
@@ -1246,12 +1289,29 @@ def run_hindcast(
             print(f"  Ground-truth cells (FIRED day≤{window_end.date()}): {truth_cells}  "
                   f"({truth_cells * land.config.CELL_SIZE_METERS**2 / 1e4:.1f} ha)")
 
+            # ── Perimeter assimilation seed (FARSITE-style validation) ────
+            # Seed the CA from the observed cumulative perimeter through the
+            # ignition day; the optimizer then only has to reproduce the
+            # marginal spread inside the hindcast window instead of growing
+            # a megafire from a single point.
+            if assimilate_perimeter and _seed_date is not None:
+                _seed_cum = fired_timeline[fired_timeline["burn_date"] <= _seed_date]
+                if not _seed_cum.empty:
+                    seed_mask_coarse = _f2g(_seed_cum, fired_bbox, (rows, cols))
+                    _n_seed = int(seed_mask_coarse.sum())
+                    print(f"  [Assimilate] Seeding from cumulative day-{_day_idx + 1} "
+                          f"perimeter: {_n_seed} cells "
+                          f"({_n_seed * land.config.CELL_SIZE_METERS**2 / 1e4:.1f} ha)")
+                    if _n_seed == 0:
+                        seed_mask_coarse = None
+
             if truth_cells == 0:
                 print("  ⚠ FIRED returned zero burned cells for this bbox/date range.")
                 print("    Falling back to NASA FIRMS for ground truth.")
                 using_fired        = False
                 fired_timeline     = None
                 fired_truth_window = None
+                seed_mask_coarse   = None
         except Exception as _fired_err:
             import traceback as _tb
             print(f"  ⚠ FIRED loader error: {_fired_err}")
@@ -1260,6 +1320,7 @@ def run_hindcast(
             using_fired        = False
             fired_timeline     = None
             fired_truth_window = None
+            seed_mask_coarse   = None
 
         if not using_fired:
             # FIRMS fallback
@@ -1316,6 +1377,13 @@ def run_hindcast(
     print("  Hidden variables:")
     print("    params[0] = fuel_moisture_offset  in [-0.15,  0.00]  (drier only)")
     print("    params[1] = wind_multiplier        in [ 0.50,  6.00]")
+    print("    params[2] = wind_direction_offset  in [-30.0, 30.0]")
+    print("    params[3] = ignition_threshold     in [ 0.15,  1.00]")
+    print("    params[4] = burn_time_mult         in [ 1.00,  5.00]")
+    if seed_mask_coarse is not None:
+        print(f"  Seeding mode: PERIMETER ASSIMILATION ({int(seed_mask_coarse.sum())} cells)")
+    else:
+        print(f"  Seeding mode: point ignition ({len(ignition_rcs)} seed(s))")
     print(f"  Generations={maxiter}, PopSize={popsize}")
     print(f"  Progress logged every 10 evaluations.\n")
 
@@ -1326,12 +1394,15 @@ def run_hindcast(
         hindcast_steps  = hindcast_steps,
         ignition_rcs    = ignition_rcs,
         eval_callback   = eval_callback,
+        seed_mask       = seed_mask_coarse,
     )
 
     bounds = [
         (-0.15,  0.00),   # fuel_moisture_offset: drier only (physically correct)
         ( 0.50,  6.00),   # wind_multiplier: up to 6× ERA5 (10m→midflame, gusts, pyroconv.)
         (-30.0,  30.0),   # wind_direction_offset: ±30° ERA5 direction bias correction
+        ( 0.15,  1.00),   # ignition_threshold: heat needed to ignite (fire persistence)
+        ( 1.00,  5.00),   # burn_time_mult: per-cell burn duration multiplier
     ]
 
     de_result = differential_evolution(
@@ -1350,6 +1421,8 @@ def run_hindcast(
     best_moisture_offset = float(de_result.x[0])
     best_wind_mult       = float(de_result.x[1])
     best_wind_dir_offset = float(de_result.x[2]) if len(de_result.x) > 2 else 0.0
+    best_ign_threshold   = float(de_result.x[3]) if len(de_result.x) > 3 else 1.0
+    best_burn_time_mult  = float(de_result.x[4]) if len(de_result.x) > 4 else 1.0
     best_error           = float(de_result.fun)
 
     # ── Step 7: Reload at fine resolution, run final simulation ──────────
@@ -1442,18 +1515,39 @@ def run_hindcast(
     # and BURN_TIME_STEPS is auto-scaled to preserve physical burn duration.
     final_sim   = CellularAutomataFire(land_fine, config, dt=dt_fine)
     cell_m_fine = land_fine.config.CELL_SIZE_METERS
-    radius      = max(1, int(375 / cell_m_fine / 2))
-    for (r0, c0) in ignition_rcs_fine:
-        for dr in range(-radius, radius + 1):
-            for dc in range(-radius, radius + 1):
-                rr, cc = r0 + dr, c0 + dc
-                if 0 <= rr < fine_rows and 0 <= cc < fine_cols:
-                    final_sim.ignite(rr, cc)
+
+    # Apply optimised fire-persistence params (before ignition so seed burn
+    # timers pick up the scaled duration)
+    final_sim._ignition_threshold = best_ign_threshold
+    final_sim._burn_time_steps    = max(
+        1, int(round(final_sim._burn_time_steps * best_burn_time_mult)))
+
+    seed_mask_fine = None
+    if seed_mask_coarse is not None and using_fired:
+        # Re-rasterise the assimilated perimeter at fine resolution
+        from pipeline.fired_loader import fired_polygon_to_grid_mask as _f2g_fine
+        _seed_cum = fired_timeline[fired_timeline["burn_date"] <= _seed_date]
+        seed_mask_fine = _f2g_fine(
+            _seed_cum, (t_lat_min, t_lat_max, t_lon_min, t_lon_max),
+            (fine_rows, fine_cols))
+        n_lit = final_sim.ignite_region(seed_mask_fine)
+        print(f"  [Assimilate] Fine seed: {int(seed_mask_fine.sum())} cells "
+              f"({n_lit} combustible lit)")
+    else:
+        radius = max(1, int(375 / cell_m_fine / 2))
+        for (r0, c0) in ignition_rcs_fine:
+            for dr in range(-radius, radius + 1):
+                for dc in range(-radius, radius + 1):
+                    rr, cc = r0 + dr, c0 + dc
+                    if 0 <= rr < fine_rows and 0 <= cc < fine_cols:
+                        final_sim.ignite(rr, cc)
 
     for _ in range(hindcast_steps_fine):
         final_sim.step()
 
     final_mask = (final_sim.state >= 1) | (final_sim.ignition_fraction >= 0.5)
+    if seed_mask_fine is not None:
+        final_mask |= seed_mask_fine
 
     # Surface air-computed per-cell wind grids onto the landscape so the GUI
     # and 3D viewer use the physics-corrected (WAF + draft + Poisson) field.
@@ -1480,9 +1574,13 @@ def run_hindcast(
     print(f"  Ground-truth cells: {truth_cells}")
     print(f"  Predicted cells   : {int(final_mask.sum())}")
     print()
+    print(f"  Seeding mode      : "
+          f"{'perimeter assimilation' if seed_mask_fine is not None else 'point ignition'}")
+    print(f"  Optimal ignition threshold : {best_ign_threshold:.3f}")
+    print(f"  Optimal burn-time multiplier: {best_burn_time_mult:.2f}x")
     print(f"  Optimal moisture offset : {best_moisture_offset:+.4f}")
     print(f"    -> Effective midflame moisture ~= "
-          f"{float(optimizer.base_moisture.mean()) + best_moisture_offset:.3f}")
+          f"{float(np.clip(optimizer.base_moisture + best_moisture_offset, 0.01, 0.30).mean()):.3f}")
     print(f"  Optimal wind multiplier : {best_wind_mult:.3f}x  "
           f"(applied unchanged on fine grid — Rothermel physics preserved)")
     print(f"    -> Effective wind speed approx "
@@ -1502,9 +1600,12 @@ def run_hindcast(
             "fuel_moisture_offset": best_moisture_offset,
             "wind_multiplier":      best_wind_mult,
             "wind_direction_offset":best_wind_dir_offset,
+            "ignition_threshold":   best_ign_threshold,
+            "burn_time_mult":       best_burn_time_mult,
             "dt_fine_min":          dt_fine,        # actual time step used on fine grid
             "hindcast_steps_fine":  hindcast_steps_fine,
         },
+        "assimilated":      seed_mask_fine is not None,
         "best_error":       best_error,
         "iou":              final_iou,
         "predicted_mask":   final_mask,

@@ -98,6 +98,7 @@ class CellularAutomataFire:
         # Optimizer-tunable physics parameters
         self._ignition_threshold  = 1.0   # heat accumulation needed to ignite
         self._spotting_rate_mult  = 1.0   # multiplier on firebrand lofting probability
+        self._canopy_wind_mult    = 1.0   # midflame wind scaling (WAF proxy), survives rebuilds
 
         config_dt = config.dt if hasattr(config, 'dt') else 0.1
         self.dt   = dt if dt is not None else config_dt
@@ -156,7 +157,9 @@ class CellularAutomataFire:
         self.wetness[mask] = np.maximum(self.wetness[mask], wet)
         self.water_amount[mask] = np.minimum(self.water_amount[mask] + wet * 1.5, 10.0)
         active = mask & (self.state == 1)
-        self.state[active] = 0
+        # Doused cells were on fire — they stay scorched (state 2, the dark
+        # "burned" overlay); only the orange "burning" indication goes away.
+        self.state[active] = 2
         self.burn_timer[active] = 0
         clear_heat = mask & (self.state != 2)
         self.ignition_fraction[clear_heat] = 0.0
@@ -334,6 +337,10 @@ class CellularAutomataFire:
         self._combustible_mask = valid_cells
 
         wind_u_grid, wind_v_grid = compute_wind_field(self.landscape, self.config)
+        canopy_mult = float(getattr(self, "_canopy_wind_mult", 1.0))
+        if abs(canopy_mult - 1.0) > 1e-6:
+            wind_u_grid = np.clip(wind_u_grid * canopy_mult, -100.0, 100.0).astype(np.float32)
+            wind_v_grid = np.clip(wind_v_grid * canopy_mult, -100.0, 100.0).astype(np.float32)
         self._wind_u_grid = wind_u_grid
         self._wind_v_grid = wind_v_grid
 
@@ -478,24 +485,13 @@ class CellularAutomataFire:
             self.wetness[self.blocked_mask] = 1.0
 
         if np.any(self.water_amount > 0.0):
-            self.water_amount *= 0.9985
-            self.water_amount[self.water_amount < 0.005] = 0.0
-
-            spread = 0.018
-            water_spread = (
-                np.roll(self.water_amount, 1,  axis=0) +
-                np.roll(self.water_amount, -1, axis=0) +
-                np.roll(self.water_amount, 1,  axis=1) +
-                np.roll(self.water_amount, -1, axis=1)
-            ) * spread
-            self.water_amount = np.maximum(
-                0.0, self.water_amount * (1.0 - 4.0 * spread) + water_spread
-            ).astype(np.float32)
-
-            moisture_boost = np.minimum(self.water_amount * 0.02, 0.08)
-            self.landscape.moisture = np.clip(
-                self.landscape.moisture + moisture_boost, 0.01, 0.35
-            ).astype(np.float32)
+            # Evaporation: ~15 sim-minute half-life (at dt=0.25 min/step) —
+            # dropped water loses its power over time and eventually vanishes.
+            # Deliberately NO neighbour diffusion and NO permanent moisture
+            # write-back any more: both made water act far outside the brush
+            # footprint and left an invisible, never-expiring suppression halo.
+            self.water_amount *= 0.988
+            self.water_amount[self.water_amount < 0.02] = 0.0
 
         self._sim_step += 1
 
@@ -505,23 +501,42 @@ class CellularAutomataFire:
     def _apply_water_extinction(self, burning_mask: np.ndarray) -> None:
         if not burning_mask.any():
             return
-        w0 = getattr(self, '_cached_w0',
-                     np.zeros(self.state.shape, dtype=np.float32))
+        # Water can only put out cells it actually covers. Without this gate
+        # the ground-moisture term of the sigmoid gave EVERY burning cell on
+        # the map a small random chance to die whenever any droplet existed
+        # anywhere — fires visibly went out far outside the wet footprint.
+        burning_mask = burning_mask & (self.water_amount > 0.05)
+        if not burning_mask.any():
+            return
+        # Restrict all math to the bounding box of the burning cells. This
+        # runs once per water droplet while painting — full-grid (800×800)
+        # arithmetic + RNG here used to freeze the simulation mid-stroke.
+        rr = np.flatnonzero(burning_mask.any(axis=1))
+        cc = np.flatnonzero(burning_mask.any(axis=0))
+        sl = (slice(int(rr[0]), int(rr[-1]) + 1),
+              slice(int(cc[0]), int(cc[-1]) + 1))
 
-        water_effect  = np.minimum(self.water_amount * 4.0, 4.0)
+        w0_full = getattr(self, '_cached_w0', None)
+        w0 = (w0_full[sl] if w0_full is not None
+              else np.zeros(burning_mask[sl].shape, dtype=np.float32))
+
+        water_effect  = np.minimum(self.water_amount[sl] * 4.0, 4.0)
         fuel_resist   = w0 * 16.0
-        moisture_help = self.landscape.moisture * 3.0
-        wind_resist   = np.hypot(self._wind_u_grid, self._wind_v_grid) * 0.35
+        moisture_help = self.landscape.moisture[sl] * 3.0
+        wind_resist   = np.hypot(self._wind_u_grid[sl], self._wind_v_grid[sl]) * 0.35
 
         raw   = water_effect - fuel_resist + moisture_help - wind_resist - 2.0
         p_ext = (1.0 / (1.0 + np.exp(-raw))).astype(np.float32)
 
-        rnd         = np.random.random(self.state.shape).astype(np.float32)
-        extinguish  = burning_mask & (rnd < p_ext)
+        rnd        = np.random.random(p_ext.shape).astype(np.float32)
+        extinguish = burning_mask[sl] & (rnd < p_ext)
         if extinguish.any():
-            self.state[extinguish] = 0
-            self.burn_timer[extinguish] = 0
-            self.ignition_fraction[extinguish] = 0.0
+            # Slices are views — writing through them updates the full grids.
+            # Doused cells stay scorched (state 2 → the dark "burned" overlay);
+            # only the orange "burning" indication is removed.
+            self.state[sl][extinguish] = 2
+            self.burn_timer[sl][extinguish] = 0
+            self.ignition_fraction[sl][extinguish] = 0.0
 
     # ──────────────────────────────────────────────────────────────────────────
     # Cell explanation (used by Alt+click / rect analysis)
@@ -866,4 +881,12 @@ class CellularAutomataFire:
         if land_r.size == 0:
             return
 
-        np.add.at(self.ignition_fraction, (land_r, land_c), 0.5)
+        # Firefighter crews on a containment corridor catch embers that land
+        # inside it — damp the deposit by the local containment strength.
+        # Brands landing beyond the corridor are unaffected (ember transport
+        # is how real fires defeat containment lines).
+        deposit = np.full(land_r.shape, 0.5, dtype=np.float32)
+        if np.any(self.containment_strength > 0.0):
+            deposit *= 1.0 - self.containment_strength[land_r, land_c]
+
+        np.add.at(self.ignition_fraction, (land_r, land_c), deposit)

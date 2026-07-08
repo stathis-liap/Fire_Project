@@ -1,0 +1,287 @@
+% ============================================================================
+% WILSON Fire Project — Validation & Benchmark Data Appendix
+% Generated 2026-07-08 from automated test runs (scripts + raw JSON in the
+% session scratchpad; hindcast runs use FIRED perimeters + ERA5 weather).
+% Compile standalone, or \input individual tables into the main report.
+% ============================================================================
+\documentclass[11pt]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{amsmath}
+\begin{document}
+
+\section*{WILSON Fire Project --- Validation \& Benchmark Data}
+
+\subsection*{A. Hindcast validation against FIRED satellite perimeters}
+
+Thirteen end-to-end hindcast runs (NASA FIRED daily perimeters as ground
+truth, Open-Meteo ERA5 weather, Copernicus COP30 terrain + CORINE fuels).
+Differential Evolution calibrates five hidden parameters (moisture offset,
+wind multiplier, wind direction offset, ignition threshold, burn-time
+multiplier); budget \texttt{maxiter}=2, \texttt{popsize}=4; coarse grid
+$200{\times}200$ (${\sim}278$\,m), final IoU scored on $800{\times}800$
+(${\sim}69$\,m). \emph{Point} = seeded from day-1 polygon centroids
+(from-ignition skill). \emph{Assim.}~$d_n$ = seeded from the observed
+cumulative perimeter of day $n$ (FARSITE-style validation), predicting the
+next 24\,h (48\,h where noted).
+
+\begin{table}[htbp]
+\centering
+\caption{Hindcast IoU for all scenarios. $A_p/A_t$ = predicted/truth area
+ratio; $k_w$ = calibrated wind multiplier; $\theta_i$ = ignition threshold;
+$b_t$ = burn-time multiplier.}
+\small
+\begin{tabular}{llrrrrrl}
+\toprule
+Fire & Scenario & IoU (\%) & $A_p/A_t$ & $k_w$ & $\theta_i$ & $b_t$ &
+Interpretation \\
+\midrule
+Rhodes 2023 & Point, $d_1$      & 42.6 & 1.9 & 0.62 & 0.55 & 2.57 & $d_1$ already 968\,ha, spreading \\
+Rhodes 2023 & Assim.\ $d_2$     & 20.8 & 4.6 & 1.04 & 0.96 & 1.75 & real $d_2{\to}d_3$ growth tiny (+17\%) \\
+Rhodes 2023 & Assim.\ $d_4$     & 47.6 & 1.8 & 0.74 & 0.80 & 1.78 & main run of fire \\
+Evoia 2021  & Point, $d_1$      &  1.9 & 26  & 0.76 & 0.61 & 1.03 & $d_1$ smolder (43\,ha), unmatchable \\
+Evoia 2021  & Assim.\ $d_2$     &  9.4 & 9.6 & 2.20 & 0.16 & 1.66 & $d_2{\to}d_3$ eruption ($43\times$) \\
+Evoia 2021  & Assim.\ $d_4$     & 53.2 & 1.1 & 1.41 & 0.91 & 3.46 & eruption phase, well captured \\
+Evoia 2021  & Assim.\ $d_4$, 48\,h & 52.9 & 1.6 & 2.53 & 0.72 & 4.14 & 2-day forecast holds up \\
+Evoia 2021  & Assim.\ $d_6$     & 66.7 & 1.4 & 1.13 & 0.88 & 1.03 & steadier growth phase \\
+Evoia 2021  & Assim.\ $d_8$     & 90.2 & 1.1 & 1.10 & 0.76 & 1.46 & late stage, small marginal growth \\
+Evros 2023  & Point, $d_1$      &  2.0 & 24  & 2.49 & 0.59 & 1.18 & $d_1$ smolder (22\,ha) \\
+Evros 2023  & Assim.\ $d_4$     & 43.0 & 2.2 & 1.59 & 0.47 & 4.55 & explosive $d_4{\to}d_5$ ($3\times$) \\
+Evros 2023  & Assim.\ $d_8$     & 71.3 & 1.4 & 1.04 & 0.96 & 1.75 & mid--late stage \\
+\midrule
+\multicolumn{2}{l}{Mean, assimilated $d_4$ (3 fires)} & 47.9 & & & & & \\
+\multicolumn{2}{l}{Mean, all assimilated (9 runs)}    & 50.6 & & & & & \\
+\multicolumn{2}{l}{Mean, point $d_1$ (3 fires)}       & 15.5 & & & & & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Reading the sweep.} Skill tracks the \emph{relative}
+next-day growth of the real fire: seeding during eruption days
+(Evoia $d_2{\to}d_3$: $43\times$ area jump) or stall days (Rhodes
+$d_2{\to}d_3$: $+17\%$, while the unsuppressed model keeps running) hurts;
+mid/late-stage seeding reaches 43--90\%. The model \emph{always}
+over-predicts ($A_p/A_t>1$ in every run): no suppression or evacuation
+effects are modelled, and a low DE budget was used. A repeat of Evoia
+$d_4$ at half the DE budget scored 51.6\% vs.\ 53.2\%, so results are not
+budget-limited. Note the cumulative-scoring convention includes the
+assimilated seed area, which inflates late-day IoU.
+
+\subsection*{B. Historical fire context (FIRED + ERA5)}
+
+\begin{table}[htbp]
+\centering
+\caption{FIRED cumulative burned area (ha) by day, and ERA5 daily-mean
+weather at the ignition-day / day-4 seeds. Low ERA5 wind on eruption days
+(0.4--3\,m/s) is why the optimizer's wind multiplier and the $6{\times}$
+upper bound exist: the 0.25$^\circ$ reanalysis misses mesoscale and
+pyroconvective winds.}
+\begin{tabular}{lrrrrrrr}
+\toprule
+ & \multicolumn{4}{c}{Cumulative area (ha)} & \multicolumn{3}{c}{ERA5 (day 1 / day 4)} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-8}
+Fire & $d_1$ & $d_2$ & $d_4$ & final & wind (m/s) & $T$ ($^\circ$C) & RH (\%) \\
+\midrule
+Evoia 2021 (ev.\ 2871, 12\,d)  & 43   & 130   & 11\,226 & 52\,521 & 1.5 / 0.4 & 27.9 / 34.0 & 61 / 22 \\
+Rhodes 2023 (ev.\ 130111, 10\,d) & 968 & 1\,763 & 4\,174 & 19\,874 & 1.7 / 3.0 & 26.9 / 24.9 & 52 / 76 \\
+Evros 2023 (ev.\ 105620, 18\,d) & 22   & 1\,789 & 17\,928 & 89\,422 & 1.5 / 2.5 & 22.7 / 24.3 & 85 / 55 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Fuel composition of each $0.5^\circ{\times}0.5^\circ$ simulation
+domain (CORINE + OSM overlay, $200{\times}200$ grid; non-combustible
+includes sea for these coastal domains).}
+\begin{tabular}{lrrrrrr}
+\toprule
+Fire & Non-comb. & Roads/urban & Pine & Maquis & Grass/phrygana & Oak \\
+\midrule
+Evoia 2021  & 45.9\% & 16.5\% & 11.0\% & 6.7\% & 4.6\% & 2.4\% \\
+Rhodes 2023 & 58.5\% & 12.0\% &  6.4\% & 9.0\% & 8.6\% & --   \\
+Evros 2023  & 47.7\% & 13.5\% &  6.1\% & 6.4\% & 10.9\% & 9.8\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{C. Fire-model physics characterization}
+
+Controlled synthetic landscapes (uniform fuel, flat unless noted, 50\,m
+cells, $dt=0.5$\,min, 60-min fires, fixed RNG seed).
+
+\begin{table}[htbp]
+\centering
+\caption{Rate of spread (dry grass, moisture 0.06). Left: vs.\ open wind
+(flat). Centre: vs.\ slope (no wind). Right: vs.\ moisture (6\,m/s wind).
+Downwind ROS saturates above ${\sim}12$\,m/s open wind (Rothermel
+1\,500\,ft/min effective-wind cap); upwind spread stays at the zero-wind
+0.8\,m/min backing rate. Moisture shows the $\eta_m$ extinction cliff
+between 0.10 and 0.15 (grass $m_x$).}
+\begin{tabular}{rr@{\qquad}rr@{\qquad}rr}
+\toprule
+Wind (m/s) & ROS (m/min) & Slope ($^\circ$) & ROS$_{\uparrow}$ (m/min) & Moisture & ROS (m/min) \\
+\midrule
+ 0 &  0.8 &  0 &  0.8 & 0.03 & 39.2 \\
+ 2 &  8.3 &  5 &  0.8 & 0.06 & 31.7 \\
+ 4 & 18.3 & 10 &  3.3 & 0.10 & 28.3 \\
+ 6 & 31.7 & 15 &  5.0 & 0.15 &  0.8 \\
+ 9 & 64.2 & 20 &  7.5 & 0.20 &  0.8 \\
+12 & 82.5 & 30 & 15.0 & 0.24 &  0.8 \\
+15 & 82.5 &    &      &      &      \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Fuel-dependent behaviour at 6 and 12\,m/s open wind. The wind
+adjustment factor (WAF) reduces open wind to midflame wind under canopy;
+surface spread under pine/oak canopy is therefore minimal at ERA5-scale
+winds --- crown-fire behaviour is absorbed by the optimizer's wind and
+per-fuel multipliers instead.}
+\begin{tabular}{lrrrr}
+\toprule
+Fuel & WAF & Midflame @6\,m/s & ROS @6 (m/min) & ROS @12 (m/min) \\
+\midrule
+Dry grass          & 0.40 & 2.40\,m/s & 31.7 & 82.5 \\
+Maquis dense shrub & 0.20 & 1.20\,m/s & 18.3 & 45.0 \\
+Phrygana low scrub & --   & --        & 17.5 & --   \\
+Olive grove        & --   & --        &  6.7 & --   \\
+Aleppo pine        & 0.10 & 0.60\,m/s &  0.8 &  1.7 \\
+Oak forest         & 0.12 & 0.72\,m/s &  0.8 &  3.3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Numerical properties. Resolution test: identical
+$10{\times}10$\,km domain, 2-h fire, 6\,m/s wind, CFL-scaled
+$dt \propto \Delta x$. Areas agree within 3\% between 100- and 50-m cells;
+the 25-m grid over-shoots ${\sim}40\%$ because firebrand spotting
+distances are resolution-independent in metres but land more, finer
+ignition targets. Determinism: two runs with the same NumPy seed produce
+bit-identical states.}
+\begin{tabular}{lrrr@{\qquad}lr}
+\toprule
+Grid & Cell (m) & $dt$ (min) & Burned (ha) & Performance & ms/step \\
+\midrule
+$100^2$ & 100 & 1.00 & 677 & $200^2$ grid & 0.9 \\
+$200^2$ &  50 & 0.50 & 696 & $400^2$ grid & 3.5 \\
+$400^2$ &  25 & 0.25 & 992 & $800^2$ grid & 15.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent At the interactive default ($800^2$, $dt=0.05$\,min) the engine
+sustains ${\sim}63$ steps/s $\approx$ 3.2 simulated minutes per wall second;
+the $200^2$ optimizer grid runs ${\sim}1\,200$ steps/s. WebSocket frame
+encoding (RLE GeoJSON, 80\,k fire cells on $800^2$) costs 7.3\,ms and
+104\,KB per frame. Microclimate memory serializes to 1.4\,MB JSON in
+25\,ms with a lossless round-trip.
+
+\subsection*{D. Intervention efficacy}
+
+Identical wind-driven grass fires (6\,m/s, $300^2$ grid); barrier placed
+3\,km downwind of ignition; burned area after 3\,h vs.\ control.
+
+\begin{table}[htbp]
+\centering
+\caption{Burned area after 3\,h. The ember-transport experiment (bottom)
+isolates why containment lines underperform: with spotting disabled the
+0.95-strength line holds completely, so \emph{all} line breaching is
+firebrand transport over the corridor --- consistent with real
+ember-driven Mediterranean fires. Firebreaks block embers whose flight
+path crosses them; water drops on the head knock the fire back directly.}
+\begin{tabular}{lrr}
+\toprule
+Scenario & Burned (ha) & Reduction \\
+\midrule
+Control (no intervention)               & 1\,581 & --    \\
+Firebreak, 150\,m corridor              &   750  & 53\%  \\
+Firebreak, 250\,m corridor              &   734  & 54\%  \\
+Containment line, $s=0.7$               & 1\,493 &  6\%  \\
+Containment line, $s=0.95$              & 1\,404 & 11\%  \\
+Containment $s=0.7$ + water + humidity  & 1\,470 &  7\%  \\
+3 aerial drops on fire head at 60\,min  &   861  & 46\%  \\
+\midrule
+Containment $s=0.95$, spotting disabled &   743  & 53\% (line holds; fire never crosses) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{E. Sandbox PSO optimizer}
+
+Particle-swarm calibration (12 particles $\times$ 8 iterations,
+12-parameter space, synthetic $200^2$ terrain, 2-h fire vs.\ a drawn truth
+polygon; 6 worker threads).
+
+\begin{table}[htbp]
+\centering
+\caption{Best-so-far IoU per PSO iteration. The microclimate warm start
+(ignition-frequency prior from 50 previous optimizer simulations)
+accelerates early convergence but converges to a worse optimum here: the
+learned spatial prior biases the search toward previously-burned corridors.
+Useful for fast triage; disable for final calibration.}
+\begin{tabular}{lrrrrrrrr@{\qquad}rr}
+\toprule
+ & \multicolumn{8}{c}{Iteration} & Final & Wall (s) \\
+\cmidrule(lr){2-9}
+Run & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & IoU & \\
+\midrule
+Fresh                  & .00 & .37 & .40 & .40 & .44 & .45 & .50 & .52 & \textbf{0.556} & 149 \\
+Microclimate warm start& .00 & .42 & .46 & .47 & .47 & .47 & .47 & .47 & 0.476 & 129 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{F. Software verification \& project statistics}
+
+\begin{itemize}
+  \item Regression suite (optimizer state-freeze, canopy-factor
+        persistence, cross-resolution fire restore, parameter
+        application): \textbf{5/5 pass}.
+  \item All Python modules byte-compile; WebSocket protocol handlers
+        import cleanly.
+  \item Determinism: bit-identical simulation states under a fixed RNG
+        seed (Table in \S C).
+  \item Codebase: ${\sim}9\,100$ lines of Python (core model, pipelines,
+        server) + 5\,300-line web client; 23 Greek fuel classes (4
+        non-burning); 41 generated UI icons.
+  \item Data assets: FIRED Greece 2000--2024 daily perimeters (22\,MB
+        GeoPackage, 24\,867 features); 34 cached DEM/CORINE rasters.
+\end{itemize}
+
+\subsection*{G. Defects found and fixed during this test campaign}
+
+\begin{enumerate}
+  \item Firebrand spotting ignored containment-line strength at the
+        landing cell; brands now damped by local crew strength (embers
+        beyond the corridor unaffected --- Table \S D reflects the fix).
+  \item Hindcast: ERA5 weather was fetched for the FIRMS query start date
+        rather than the seed day whenever \texttt{ignition\_day} $>1$.
+  \item Hindcast: the perimeter-assimilation + tunable-persistence
+        upgrade existed only in an unpushed working copy; re-implemented
+        and validated (Evoia $d_4$: 53.2\% vs.\ 52.0\% previously).
+  \item Cosmetic: results report printed physically impossible negative
+        ``effective midflame moisture'' (clip was not applied in the
+        printout).
+\end{enumerate}
+
+\subsection*{H. Overall assessment}
+
+From-ignition (day-1) forecasting is only skilful when the fire is
+already large at first detection (Rhodes: 42.6\%); smoldering-start fires
+are structurally over-predicted (${\sim}2\%$). Operational-style
+assimilated forecasting averages ${\sim}48\%$ IoU at day 4 and 71--90\%
+late-event, inside the 30--60\% band typical of published FARSITE/FlamMap
+validations, with a consistent over-prediction bias attributable to
+missing suppression modelling and smooth ERA5 winds. The physics engine
+reproduces the qualitative Rothermel responses (wind power-law with
+saturation, slope amplification, moisture extinction cliff, canopy wind
+sheltering), is deterministic under a fixed seed, resolution-consistent
+to within 3\% down to 50-m cells, and fast enough for interactive use.
+
+\end{document}

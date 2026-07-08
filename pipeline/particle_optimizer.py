@@ -254,12 +254,10 @@ def _evaluate_particle(
 
     # ── Canopy wind factor: scale the computed midflame wind field ───────────
     # This captures canopy sheltering / channelling effects not in the base model.
-    if abs(canopy_wind_factor - 1.0) > 1e-4 and hasattr(sim, '_wind_u_grid'):
-        sim._wind_u_grid = np.clip(sim._wind_u_grid * canopy_wind_factor,
-                                   -100.0, 100.0).astype(np.float32)
-        sim._wind_v_grid = np.clip(sim._wind_v_grid * canopy_wind_factor,
-                                   -100.0, 100.0).astype(np.float32)
-        # Recompute p_spread with the adjusted wind field
+    # _canopy_wind_mult is honored inside _precompute_ros_grid, so the scaling
+    # is not wiped when the wind grids are rebuilt.
+    if abs(canopy_wind_factor - 1.0) > 1e-4:
+        sim._canopy_wind_mult = canopy_wind_factor
         sim._precompute_ros_grid()
 
     # ── Slope amplification: scale upslope p_spread ──────────────────────────
@@ -323,6 +321,11 @@ def _evaluate_particle(
     union = int((pred_at_truth | truth_mask).sum())
     iou   = inter / max(union, 1)
 
+    # Frozen fire snapshot at the mask age — the server restores this exact
+    # state when the user chooses "continue from best IoU fire", instead of
+    # re-simulating (which would produce a different, often far larger fire).
+    state_at_truth = sim.state.copy()
+
     # ── Continue for 1 more hour to build the forward-projection ensemble ────
     # The ensemble heatmap shows where the calibrated fire is likely to spread
     # *beyond* the known perimeter, not just where it already is.
@@ -333,7 +336,7 @@ def _evaluate_particle(
             break
 
     pred_extended = (sim.state >= 1)
-    return iou, pred_extended
+    return iou, pred_extended, state_at_truth
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -485,6 +488,7 @@ def run_particle_swarm(
     pbest_iou = np.full(n_particles, -np.inf)
     gbest_pos = positions[0].copy()
     gbest_iou = -np.inf
+    gbest_state: np.ndarray | None = None   # frozen fire of the best particle at elapsed_hours
 
     # Top-K collection (kept sorted ascending by iou so index 0 = worst)
     top_k_heap: list[tuple[float, np.ndarray]] = []
@@ -497,7 +501,7 @@ def run_particle_swarm(
     for iteration in range(n_iterations):
         w = _W_START - (_W_START - _W_END) * iteration / max(n_iterations - 1, 1)
 
-        iter_results: list[tuple[float, np.ndarray] | None] = [None] * n_particles
+        iter_results: list[tuple[float, np.ndarray, np.ndarray] | None] = [None] * n_particles
 
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             future_map = {
@@ -514,10 +518,11 @@ def run_particle_swarm(
             for fut in as_completed(future_map):
                 i = future_map[fut]
                 try:
-                    iou, pred = fut.result()
+                    iou, pred, state_snap = fut.result()
                 except Exception:
-                    iou, pred = 0.0, np.zeros((rows, cols), dtype=bool)
-                iter_results[i] = (iou, pred)
+                    iou, pred   = 0.0, np.zeros((rows, cols), dtype=bool)
+                    state_snap  = np.zeros((rows, cols), dtype=np.int8)
+                iter_results[i] = (iou, pred, state_snap)
                 n_done += 1
                 if progress_cb:
                     elapsed = _time.monotonic() - t_start
@@ -526,13 +531,14 @@ def run_particle_swarm(
                                 max(0.0, gbest_iou), eta)
 
         # Update personal/global bests and top-K heap
-        for i, (iou, pred) in enumerate(iter_results):
+        for i, (iou, pred, state_snap) in enumerate(iter_results):
             if iou > pbest_iou[i]:
                 pbest_iou[i] = iou
                 pbest_pos[i] = positions[i].copy()
             if iou > gbest_iou:
-                gbest_iou = iou
-                gbest_pos = positions[i].copy()
+                gbest_iou   = iou
+                gbest_pos   = positions[i].copy()
+                gbest_state = state_snap.copy()
 
             if len(top_k_heap) < top_k:
                 top_k_heap.append((iou, pred.astype(np.float32)))
@@ -585,6 +591,8 @@ def run_particle_swarm(
     return {
         "best_params":                best_params,
         "best_iou":                   float(gbest_iou),
+        "best_fire_state":            gbest_state,   # int8 grid frozen at elapsed_hours (or None)
+        "elapsed_hours":              float(elapsed_hours),
         "heatmap_png_b64":            heatmap_to_png_b64(heatmap),
         "geo_grid":                   geo_grid,
         "rows":                       rows,

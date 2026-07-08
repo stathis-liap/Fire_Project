@@ -53,6 +53,8 @@ async def run_hindcast_async(
     popsize: int = 12,
     terrain_buf: float = 0.25,
     progress_callback=None,
+    ignition_day: int = 1,
+    assimilate_perimeter: bool = True,
 ) -> dict:
     """
     Run hindcast optimization for a named historical fire.
@@ -101,7 +103,8 @@ async def run_hindcast_async(
             maxiter=maxiter, popsize=popsize,
             terrain_buffer=terrain_buf,
             fired_gpkg=fired_gpkg,
-            ignition_day=1,
+            ignition_day=ignition_day,
+            assimilate_perimeter=assimilate_perimeter,
         )
 
     try:

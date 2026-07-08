@@ -76,6 +76,12 @@ log = logging.getLogger("wilson_ws")
 # Module-level microclimate singleton — persists across WebSocket connections
 _microclimate: MicroclimateLearner | None = None
 
+# Frozen fire state of the last optimizer run's best particle, kept server-side
+# so "continue from best IoU fire" restores the exact fire the optimizer found
+# (at the user-given elapsed-hours mark) instead of re-simulating from scratch.
+# Keys: state (int8 ndarray), geo_grid (GeoGrid), elapsed_hours, best_iou.
+_last_opt_fire: dict | None = None
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -107,12 +113,91 @@ def _quadrant_ros(sim, state: np.ndarray,
         max_p = sim.p_spread[:, mask].max(axis=0)
         return float(max_p.mean() * cell_m / max(sim.dt, 1e-9))
 
+    # Grid is south-up (row 0 = south, see GeoGrid): the NORTH quadrant is
+    # the cells with row index ABOVE the centroid.
     return (
-        _qros(active & (row_g <  cr)),
-        _qros(active & (col_g >  cc)),
-        _qros(active & (row_g >  cr)),
-        _qros(active & (col_g <  cc)),
+        _qros(active & (row_g >  cr)),   # N
+        _qros(active & (col_g >  cc)),   # E
+        _qros(active & (row_g <  cr)),   # S
+        _qros(active & (col_g <  cc)),   # W
     )
+
+
+# South-up grid: north = increasing row index.
+_DIR_SHIFT = {"N": (1, 0), "S": (-1, 0), "E": (0, 1), "W": (0, -1)}
+
+
+def _spread_context(sim, land, ros: dict, cell_m: float) -> dict | None:
+    """
+    Sample the terrain just ahead (~150 m) of the fire front in the dominant
+    spread direction. Returns the raw numbers the FireInfoPanel turns into
+    plain-language "heading / stalled and why" reports:
+    fuel type ahead, moisture ahead, slope, effective wind, share of
+    non-burnable ground.
+    """
+    state   = sim.state
+    burning = state == 1
+    if not burning.any():
+        return None
+
+    dom_dir = max(ros, key=ros.get)
+    rows, cols = state.shape
+
+    # A direction only counts as "the" heading when it clearly beats the
+    # runner-up — otherwise the fire is effectively spreading on all sides
+    # and any single compass label would be noise.
+    ranked = sorted(ros.values(), reverse=True)
+    dominant = ranked[0] > 0 and (len(ranked) < 2 or ranked[0] >= 1.25 * ranked[1])
+
+    k = max(2, int(150.0 / max(cell_m, 1e-6)))   # look-ahead in cells
+    dr, dc = _DIR_SHIFT[dom_dir]
+    fr, fc = np.where(burning)
+    tr, tc = fr + dr * k, fc + dc * k
+    ok = (tr >= 0) & (tr < rows) & (tc >= 0) & (tc < cols)
+    if not ok.any():
+        return None
+    fr, fc, tr, tc = fr[ok], fc[ok], tr[ok], tc[ok]
+
+    # Open (10 m) wind as the user knows it — set_wind() keeps these current
+    # through hourly weather updates. The sim's own wind grids hold *midflame*
+    # wind (already scaled down by the vegetation's WAF), which would read as
+    # "calm" to a human even in a 9 m/s gale, so don't use those for labels.
+    wind_speed  = float(getattr(land, "wind_speed", 0.0) or 0.0)
+    wind_toward = float(getattr(land, "wind_dir", 0.0) or 0.0) % 360.0
+    if wind_speed <= 0.0:   # fallback: derive from the midflame grids
+        wu = float(np.mean(sim._wind_u_grid))
+        wv = float(np.mean(sim._wind_v_grid))
+        wind_speed  = float(np.hypot(wu, wv))
+        wind_toward = float(np.degrees(np.arctan2(wu, wv))) % 360.0
+    ctx = {
+        "dir":             dom_dir,
+        "dominant":        bool(dominant),
+        "ros_m_min":       float(ros[dom_dir]),
+        "wind_speed_ms":   wind_speed,
+        "wind_toward_deg": wind_toward,
+    }
+
+    unburned = state[tr, tc] == 0
+    if unburned.any():
+        tru, tcu = tr[unburned], tc[unburned]
+        fru, fcu = fr[unburned], fc[unburned]
+        fuels = land.fuel_map[tru, tcu]
+        try:
+            non_comb = land.fuel_names.index("Non_Combustible")
+        except ValueError:
+            non_comb = -1
+        ctx["noncomb_frac"]   = float(np.mean(fuels == non_comb))
+        combustible = fuels[fuels != non_comb]
+        if combustible.size:
+            counts = np.bincount(combustible, minlength=len(land.fuel_names))
+            ctx["fuel_ahead"] = land.fuel_names[int(np.argmax(counts))]
+        ctx["moisture_ahead"] = float(np.mean(land.moisture[tru, tcu]))
+        ctx["elev_delta_m"]   = float(np.mean(land.elevation[tru, tcu])
+                                      - np.mean(land.elevation[fru, fcu]))
+    else:
+        ctx["noncomb_frac"] = 1.0
+
+    return ctx
 
 
 def _state_to_geojson(state: np.ndarray, geo_grid: GeoGrid,
@@ -237,39 +322,17 @@ def _snap_to_land(rc: tuple[int, int], land: Landscape) -> tuple[int, int] | Non
     return None
 
 
-def _apply_optimizer_params(land: Landscape, sim: "CellularAutomataFire",
-                             best_params: dict) -> None:
+def _apply_optimizer_pspread_mods(land: Landscape, sim: "CellularAutomataFire",
+                                   best_params: dict) -> None:
     """
-    Apply PSO best-params dict to an already-built sim + landscape.
-
-    Called after CellularAutomataFire.__init__ so that per-fuel ROS multipliers,
-    canopy WAF, spotting rate, and ignition threshold are all patched in.
-    p_spread is rebuilt via _precompute_ros_grid() whenever wind changes.
+    Re-apply the direct p_spread modifications from PSO best-params (slope
+    amplification + per-fuel ROS multipliers). Must be called again after every
+    _precompute_ros_grid() rebuild (e.g. hourly weather updates), because the
+    rebuild resets p_spread and would otherwise silently drop the calibration.
     """
     from pipeline.particle_optimizer import _ros_mult_for_fuel, PARAM_NAMES, PARAM_BOUNDS
 
-    wind_mult        = float(best_params.get("wind_multiplier",       1.0))
-    moisture_offset  = float(best_params.get("moisture_offset",       0.0))
-    wind_dir_offset  = float(best_params.get("wind_direction_offset", 0.0))
-    canopy_wf        = float(best_params.get("canopy_wind_factor",    1.0))
-    slope_mult       = float(best_params.get("slope_factor_mult",     1.0))
-    spotting_mult    = float(best_params.get("spotting_rate_mult",    1.0))
-    ign_threshold    = float(best_params.get("ignition_threshold",    1.0))
-
-    # Landscape-level changes (wind + moisture)
-    base_speed = float(getattr(land, "wind_speed", 5.0))
-    base_dir   = float(getattr(land, "wind_dir",   0.0))
-    land.set_wind(base_speed * wind_mult, (base_dir + wind_dir_offset) % 360.0)
-    land.moisture = np.clip(land.moisture + moisture_offset, 0.01, 0.35).astype(np.float32)
-
-    # Rebuild p_spread with modified wind/moisture
-    sim._precompute_ros_grid()
-
-    # Canopy wind factor: scale midflame wind field and rebuild p_spread
-    if abs(canopy_wf - 1.0) > 1e-4 and hasattr(sim, "_wind_u_grid"):
-        sim._wind_u_grid = np.clip(sim._wind_u_grid * canopy_wf, -100.0, 100.0).astype(np.float32)
-        sim._wind_v_grid = np.clip(sim._wind_v_grid * canopy_wf, -100.0, 100.0).astype(np.float32)
-        sim._precompute_ros_grid()
+    slope_mult = float(best_params.get("slope_factor_mult", 1.0))
 
     # Slope factor: scale upslope p_spread directions
     if abs(slope_mult - 1.0) > 1e-4 and hasattr(sim, "p_spread"):
@@ -297,6 +360,40 @@ def _apply_optimizer_params(land: Landscape, sim: "CellularAutomataFire",
             mask = (land.fuel_map == fuel_idx)
             if mask.any():
                 sim.p_spread[:, mask] = np.clip(sim.p_spread[:, mask] * mult, 0.0, 1.0)
+
+
+def _apply_optimizer_params(land: Landscape, sim: "CellularAutomataFire",
+                             best_params: dict) -> None:
+    """
+    Apply PSO best-params dict to an already-built sim + landscape.
+
+    Called after CellularAutomataFire.__init__ so that per-fuel ROS multipliers,
+    canopy WAF, spotting rate, and ignition threshold are all patched in.
+    p_spread is rebuilt via _precompute_ros_grid() whenever wind changes.
+    """
+    wind_mult        = float(best_params.get("wind_multiplier",       1.0))
+    moisture_offset  = float(best_params.get("moisture_offset",       0.0))
+    wind_dir_offset  = float(best_params.get("wind_direction_offset", 0.0))
+    canopy_wf        = float(best_params.get("canopy_wind_factor",    1.0))
+    spotting_mult    = float(best_params.get("spotting_rate_mult",    1.0))
+    ign_threshold    = float(best_params.get("ignition_threshold",    1.0))
+
+    # Landscape-level changes (wind + moisture)
+    base_speed = float(getattr(land, "wind_speed", 5.0))
+    base_dir   = float(getattr(land, "wind_dir",   0.0))
+    land.set_wind(base_speed * wind_mult, (base_dir + wind_dir_offset) % 360.0)
+    land.moisture = np.clip(land.moisture + moisture_offset, 0.01, 0.35).astype(np.float32)
+
+    # Canopy wind factor is honored inside _precompute_ros_grid, so one rebuild
+    # picks up wind, moisture, and canopy scaling together (and it survives
+    # later rebuilds — previously the scaling was wiped immediately).
+    sim._canopy_wind_mult = canopy_wf
+
+    # Rebuild p_spread with modified wind/moisture/canopy
+    sim._precompute_ros_grid()
+
+    # Slope + per-fuel multipliers act directly on p_spread
+    _apply_optimizer_pspread_mods(land, sim, best_params)
 
     # Fire physics
     sim._spotting_rate_mult = spotting_mult
@@ -342,6 +439,51 @@ def _init_sim_from_truth_mask(sim: "CellularAutomataFire",
     return int(combustible_perim.sum()), int(interior.sum())
 
 
+def _init_sim_from_saved_state(sim: "CellularAutomataFire",
+                                saved_state: np.ndarray,
+                                saved_geo: "GeoGrid",
+                                geo_grid: "GeoGrid",
+                                rows: int, cols: int) -> tuple[int, int]:
+    """
+    Project a cached optimizer fire state (small south-up grid) onto the live
+    sim grid via nearest-neighbour geo lookup:
+      • state 2 → burned,  state 1 → burning (combustible, unblocked only)
+
+    Returns (n_burning, n_burned).
+    """
+    src_rows, src_cols = saved_state.shape
+
+    lat_c = geo_grid.lat_min + (np.arange(rows) + 0.5) * \
+        (geo_grid.lat_max - geo_grid.lat_min) / rows
+    lon_c = geo_grid.lon_min + (np.arange(cols) + 0.5) * \
+        (geo_grid.lon_max - geo_grid.lon_min) / cols
+
+    src_r = np.floor((lat_c - saved_geo.lat_min) /
+                     max(saved_geo.lat_max - saved_geo.lat_min, 1e-12) * src_rows).astype(int)
+    src_c = np.floor((lon_c - saved_geo.lon_min) /
+                     max(saved_geo.lon_max - saved_geo.lon_min, 1e-12) * src_cols).astype(int)
+
+    in_r = (src_r >= 0) & (src_r < src_rows)
+    in_c = (src_c >= 0) & (src_c < src_cols)
+
+    state_up = saved_state[np.ix_(np.clip(src_r, 0, src_rows - 1),
+                                  np.clip(src_c, 0, src_cols - 1))].copy()
+    state_up[~in_r, :] = 0
+    state_up[:, ~in_c] = 0
+
+    burned  = (state_up == 2)
+    burning = (state_up == 1) & sim._combustible_mask & ~sim.blocked_mask
+
+    sim.state[burned]        = 2
+    sim.burn_timer[burned]   = 0
+    sim.state[burning]       = 1
+    sim.burn_timer[burning]  = sim._burn_time_steps
+    sim._ignition_step[burning] = 0
+    sim.ignition_fraction[burned | burning] = 0.0
+
+    return int(burning.sum()), int(burned.sum())
+
+
 def _build_landscape(msg: dict) -> tuple[Landscape, GeoGrid, float]:
     lat_c = float(msg["lat_center"])
     lon_c = float(msg["lon_center"])
@@ -379,6 +521,7 @@ def _build_landscape(msg: dict) -> tuple[Landscape, GeoGrid, float]:
                 target_shape = (800, 800),
                 osm_file     = osm_path,
             )
+            land.osm_path = osm_path   # kept for the threat advisor
             real_loaded = True
             log.info("Real terrain loaded (%dx%d cells, cell=%.0f m)",
                      *land.shape, cfg.CELL_SIZE_METERS)
@@ -453,7 +596,7 @@ def _apply_water_drop(land: Landscape, sim: CellularAutomataFire,
             sim.apply_water_mask(wet_mask, wetness=0.92)
         else:
             active = wet_mask & (sim.state == 1)
-            sim.state[active] = 0
+            sim.state[active] = 2   # doused cells stay scorched, not pristine
             sim.burn_timer[active] = 0
             sim.ignition_fraction[wet_mask & (sim.state != 2)] = 0.0
 
@@ -609,7 +752,7 @@ def _apply_firebreak(land: Landscape, sim: CellularAutomataFire,
 
 async def _run_optimizer_task(send, msg_init: dict, opt_msg: dict,
                                ctrl: dict) -> None:
-    global _microclimate
+    global _microclimate, _last_opt_fire
     try:
         from pipeline.particle_optimizer import run_particle_swarm
     except Exception as exc:
@@ -727,6 +870,19 @@ async def _run_optimizer_task(send, msg_init: dict, opt_msg: dict,
         except Exception as exc:
             log.warning("Optimizer microclimate merge failed: %s", exc)
 
+    # ── Cache the best particle's frozen fire for "continue from best IoU" ────
+    if result.get("best_fire_state") is not None:
+        _last_opt_fire = {
+            "state":         result["best_fire_state"],
+            "geo_grid":      result["geo_grid"],
+            "elapsed_hours": float(result.get("elapsed_hours", elapsed_hours)),
+            "best_iou":      float(result["best_iou"]),
+        }
+        log.info("Cached best optimizer fire (%d burning, %d burned cells @ %.1fh)",
+                 int((result["best_fire_state"] == 1).sum()),
+                 int((result["best_fire_state"] == 2).sum()),
+                 elapsed_hours)
+
     geo = result["geo_grid"]
     await send({
         "type":              "optimizer_result",
@@ -783,13 +939,15 @@ async def _handle_optimizer_session(websocket, send, msg_init: dict) -> None:
 async def _handle_hindcast_session(websocket, send, msg_init: dict) -> None:
     log.info("Hindcast session opened  %s", websocket.remote_address)
 
-    fire_name = msg_init.get("fire_name", "Evoia 2021")
+    fire_name = msg_init.get("fire_name", "Rhodes 2023")
     date_start = msg_init.get("date_start", "")
     date_end = msg_init.get("date_end", "")
     hindcast_hours = float(msg_init.get("hindcast_hours", 6.0))
     maxiter = int(msg_init.get("maxiter", 20))
     popsize = int(msg_init.get("popsize", 12))
     terrain_buf = float(msg_init.get("terrain_buf", 0.25))
+    ignition_day = int(msg_init.get("ignition_day", 1))
+    assimilate = bool(msg_init.get("assimilate_perimeter", True))
 
     await send({"type": "hindcast_status",
                 "message": f"Starting hindcast for {fire_name}..."})
@@ -815,6 +973,8 @@ async def _handle_hindcast_session(websocket, send, msg_init: dict) -> None:
             popsize=popsize,
             terrain_buf=terrain_buf,
             progress_callback=_progress,
+            ignition_day=ignition_day,
+            assimilate_perimeter=assimilate,
         )
 
         if result.get("error"):
@@ -904,6 +1064,7 @@ async def _handle(websocket):
     optimizer_mode     = msg.get("optimizer_mode")        # "ground_truth" | "best_params_sim" | None
     best_params        = msg.get("best_params")            # dict from PSO result
     use_opt_params     = bool(msg.get("use_opt_params", False))
+    use_microclimate   = bool(msg.get("use_microclimate", True))
     elapsed_hours_opt  = float(msg.get("elapsed_hours", 6.0))
     truth_mask_geojson = msg.get("truth_mask_geojson")    # GeoJSON FeatureCollection
 
@@ -917,8 +1078,8 @@ async def _handle(websocket):
         except Exception as exc:
             log.warning("Optimizer params apply failed: %s", exc)
 
-    # ── Apply microclimate corrections if available ───────────────────────────
-    if _microclimate is not None:
+    # ── Apply microclimate corrections if available (and not opted out) ──────
+    if _microclimate is not None and use_microclimate:
         mc = _microclimate.resize_to(rows, cols)
         try:
             mc.apply_to_model(sim)
@@ -950,8 +1111,34 @@ async def _handle(websocket):
             log.warning("Ground-truth init: mask rasterized to 0 cells — using point fallback")
             optimizer_mode = None   # fall through to point ignition
 
-    if optimizer_mode != "ground_truth":
-        # Normal point ignition (also used by "best_params_sim" — fast-forward happens below)
+    if optimizer_mode == "best_params_sim":
+        # Restore the exact frozen fire the optimizer scored best — do NOT
+        # re-simulate: a fresh stochastic run on the fine grid produces a
+        # different (often far larger) fire than the one the user picked.
+        restored = False
+        if _last_opt_fire is not None:
+            try:
+                n_burning, n_burned = _init_sim_from_saved_state(
+                    sim, _last_opt_fire["state"], _last_opt_fire["geo_grid"],
+                    geo_grid, rows, cols,
+                )
+                if n_burning > 0 or n_burned > 0:
+                    restored      = True
+                    ignited_count = 1
+                    elapsed_hours_opt = float(
+                        _last_opt_fire.get("elapsed_hours", elapsed_hours_opt))
+                    log.info("Best-IoU fire restored frozen at %.1fh: "
+                             "%d burning + %d burned cells (IoU %.3f)",
+                             elapsed_hours_opt, n_burning, n_burned,
+                             _last_opt_fire.get("best_iou", 0.0))
+            except Exception as exc:
+                log.warning("Best-fire restore failed (%s) — falling back to fast-forward", exc)
+        if not restored:
+            log.warning("No cached optimizer fire — falling back to point ignition "
+                        "+ fast-forward (approximate reconstruction).")
+
+    if optimizer_mode != "ground_truth" and ignited_count == 0:
+        # Normal point ignition (also the "best_params_sim" fallback — fast-forward below)
         ignition_points = msg.get("ignition_points", [])
         if not ignition_points:
             ignition_points = [{"lat": msg["lat_center"], "lon": msg["lon_center"]}]
@@ -973,7 +1160,7 @@ async def _handle(websocket):
                         sim.ignite(rr, cc)
             ignited_count += 1
 
-        # Fast-forward to elapsed_hours for "best_params_sim" mode
+        # Fast-forward to elapsed_hours for "best_params_sim" mode (fallback path)
         if optimizer_mode == "best_params_sim" and elapsed_hours_opt > 0:
             ff_steps = max(1, int(elapsed_hours_opt * 60.0 / sim.dt))
             log.info("Fast-forwarding %d steps (%.1fh) to reach optimizer match-point…",
@@ -1019,6 +1206,18 @@ async def _handle(websocket):
 
     fire_info = FireInfoPanel()
 
+    # ── Threat advisor (settlement danger levels, ETAs, escape routes) ────────
+    advisor = None
+    try:
+        from pipeline.threat_advisor import build_advisor
+        advisor = build_advisor(geo_grid, cell_m,
+                                getattr(land, "osm_path", None))
+        if advisor:
+            log.info("Threat advisor active: %d settlements tracked",
+                     len(advisor.settlements))
+    except Exception as exc:
+        log.warning("Threat advisor unavailable: %s", exc)
+
     # ── Send init_ack ─────────────────────────────────────────────────────────
     mc_summary = None
     if _microclimate is not None:
@@ -1060,9 +1259,10 @@ async def _handle(websocket):
     await send(fire_info.init_started(rows, cols, cell_m))
 
     # ── Shared control state ──────────────────────────────────────────────────
-    # Start paused for "best_params_sim" so the user can inspect the fire at
-    # the elapsed-hours snapshot before choosing to continue.
-    _start_paused = (optimizer_mode == "best_params_sim")
+    # Both optimizer continue-modes start FROZEN at the elapsed-hours snapshot:
+    # the user inspects the fire exactly as the optimizer left it, then presses
+    # Resume to let it continue burning.
+    _start_paused = optimizer_mode in ("ground_truth", "best_params_sim")
 
     ctrl = {
         "paused":         _start_paused,
@@ -1072,24 +1272,55 @@ async def _handle(websocket):
     intervention_queue: asyncio.Queue = asyncio.Queue()
     sim_history: list = []
 
+    # ── Threat-advisor assessment (runs in a worker thread, one at a time) ────
+    _advisor_state = {"last": 0.0, "busy": False}
+
+    async def _run_threat_assessment(sim_minutes: float):
+        _advisor_state["busy"] = True
+        try:
+            # assess() only reads .state — hand it a frozen snapshot so the
+            # worker thread never races the stepping simulation.
+            import types as _t
+            snap = _t.SimpleNamespace(state=sim.state.copy())
+            result = await asyncio.to_thread(advisor.assess, snap, sim_minutes)
+            if not result:
+                return
+            await send({
+                "type":        "threat_update",
+                "threats":     result["threats"],
+                "suggestions": result["suggestions"],
+                "routes":      result["routes"],
+            })
+            for ev in result["events"]:
+                await send(ev)
+        except Exception as exc:
+            log.debug("Threat assessment failed: %s", exc)
+        finally:
+            _advisor_state["busy"] = False
+
     # ── Simulation task ───────────────────────────────────────────────────────
     async def run_simulation():
-        step           = 0
+        # Optimizer continue-modes resume a fire that is already elapsed_hours
+        # old — continue the clock (and the hourly-weather index) from there
+        # instead of restarting at minute 0.
+        step = 0
+        if optimizer_mode in ("ground_truth", "best_params_sim"):
+            step = max(0, int(round(elapsed_hours_opt * 60.0 / sim.dt)))
         last_hour      = -1
         last_send_time = 0.0
 
-        # If started paused (best_params_sim mode), send a single snapshot
-        # frame so the client can render the fire at the elapsed-hours point,
-        # then wait for the user to press Resume.
+        # If started paused (optimizer continue-modes), send a single snapshot
+        # frame so the client can render the fire frozen at the elapsed-hours
+        # point, then wait for the user to press Resume.
         if _start_paused:
             _burned  = int((sim.state == 2).sum())
             _active  = int((sim.state == 1).sum())
-            _mins    = round(elapsed_hours_opt * 60.0, 1)
+            _mins    = round(step * sim.dt, 1)
             _wall    = round(ignition_wall_hour * 60.0 + _mins, 1)
             _gjb, _gjd = _state_to_geojson(sim.state, geo_grid, rows, cols)
             await send({
                 "type":                   "frame",
-                "step":                   0,
+                "step":                   step,
                 "geojson_burning":        _gjb,
                 "geojson_burned":         _gjd,
                 "burned_ha":              round(_ha(_burned, cell_m), 2),
@@ -1100,7 +1331,9 @@ async def _handle(websocket):
             })
             await send({
                 "type":    "status",
-                "message": f"Fire at {elapsed_hours_opt:.1f}h mark — press Resume to continue.",
+                "message": (f"Fire frozen at the {elapsed_hours_opt:.1f}h mark "
+                            f"({round(_ha(_burned + _active, cell_m), 1)} ha) — "
+                            f"press Resume to continue."),
                 "paused":  True,
             })
 
@@ -1139,7 +1372,7 @@ async def _handle(websocket):
                         decay_hours=float(iv.get("decay_hours", 0.0)),
                     )
                     await send({"type": "status",
-                                "message": f"Containment line deployed: {n} cells protected."})
+                                "message": f"Containment line deployed: {n * cell_m * cell_m / 1000:.1f} daa protected."})
                     await send(fire_info.intervention("containment_line", n))
 
                 elif action == "firebreak":
@@ -1152,26 +1385,37 @@ async def _handle(websocket):
                         zone_label=iv.get("label", None),
                     )
                     await send({"type": "status",
-                                "message": f"Firebreak applied (hard): {n} cells blocked."})
+                                "message": f"Firebreak cut — {n * cell_m * cell_m / 1000:.1f} daa cleared."})
                     await send(fire_info.intervention("firebreak", n))
 
                 elif action == "water_drop":
                     n = _apply_water_drop(land, sim, geo_grid,
                                           float(iv["lat"]), float(iv["lon"]),
                                           float(iv.get("radius_m", 435.0)), cell_m)
+                    if use_opt_params and best_params:
+                        # _apply_water_drop rebuilt p_spread — restore calibration
+                        try:
+                            _apply_optimizer_pspread_mods(land, sim, best_params)
+                        except Exception:
+                            pass
                     await send({"type": "status",
-                                "message": f"Water drop: {n} cells affected."})
+                                "message": f"Water drop — {n * cell_m * cell_m / 1000:.1f} daa cooled."})
                     await send(fire_info.intervention("water_drop", n))
 
                 elif action == "water_brush":
-                    _apply_water_brush(
-                        land, sim, geo_grid,
-                        float(iv["lat"]), float(iv["lon"]),
-                        float(iv.get("radius_m", 200.0)), cell_m,
-                        intensity=float(iv.get("intensity", 1.0)),
-                        falloff=float(iv.get("falloff", 0.8)),
-                        hardness=float(iv.get("hardness", 0.5)),
-                    )
+                    # Either a single droplet (lat/lon at top level) or a
+                    # Monte Carlo batch under "droplets" — one message per
+                    # brush application keeps the intervention queue light.
+                    _drops = iv.get("droplets") or [iv]
+                    for _d in _drops:
+                        _apply_water_brush(
+                            land, sim, geo_grid,
+                            float(_d["lat"]), float(_d["lon"]),
+                            float(_d.get("radius_m", iv.get("radius_m", 200.0))), cell_m,
+                            intensity=float(iv.get("intensity", 1.0)),
+                            falloff=float(iv.get("falloff", 0.8)),
+                            hardness=float(iv.get("hardness", 0.5)),
+                        )
 
             if ctrl["paused"]:
                 await asyncio.sleep(0.1)
@@ -1191,8 +1435,23 @@ async def _handle(websocket):
                     "relative_humidity":float(hrow.relative_humidity),
                     "_dir_is_from":     True,
                 }
+                if use_opt_params and best_params:
+                    # Keep the calibrated wind correction on top of hourly data
+                    w_upd["wind_speed_ms"] *= float(
+                        best_params.get("wind_multiplier", 1.0))
+                    w_upd["wind_direction"] = (
+                        w_upd["wind_direction"]
+                        + float(best_params.get("wind_direction_offset", 0.0))
+                    ) % 360.0
                 apply_weather_to_landscape(land, w_upd)
                 sim._precompute_ros_grid()
+                if use_opt_params and best_params:
+                    # The rebuild reset p_spread — put the slope/per-fuel
+                    # calibration back (canopy factor survives via the sim attr)
+                    try:
+                        _apply_optimizer_pspread_mods(land, sim, best_params)
+                    except Exception as exc:
+                        log.warning("Optimizer p_spread re-apply failed: %s", exc)
                 log.info("Hour %d weather update applied", current_hour)
                 weather_msg = {
                     "type":             "weather_update",
@@ -1254,11 +1513,11 @@ async def _handle(websocket):
                                 label = 'firebreak'
                             label_counts[label] = label_counts.get(label, 0) + 1
                         for label, cnt in label_counts.items():
-                            msg = f"Fire met {label} firebreak zone, couldn't expand (encounters: {cnt})"
+                            msg = f"Firebreak '{label}' is holding — blocked the fire {cnt}x"
                             await send({
                                 "type": "fire_event",
-                                "event_type": "info",
-                                "icon": "🛠",
+                                "event_type": "intervention",
+                                "icon": "wrench",
                                 "message": msg,
                             })
                         # clear encounters
@@ -1286,6 +1545,24 @@ async def _handle(websocket):
                     ros={"N": ros_n, "E": ros_e, "S": ros_s, "W": ros_w},
                 ):
                     await send(ev)
+                try:
+                    _sctx = _spread_context(
+                        sim, land,
+                        {"N": ros_n, "E": ros_e, "S": ros_s, "W": ros_w}, cell_m)
+                    for ev in fire_info.spread_report(
+                            _sctx,
+                            total_ha=burned_ha + active_ha,
+                            minutes=round(simulated_minutes, 1)):
+                        await send(ev)
+                except Exception as exc:
+                    log.debug("spread_report failed: %s", exc)
+
+                # Threat advisor: settlement danger levels / ETAs / routes
+                if (advisor is not None and not _advisor_state["busy"]
+                        and now - _advisor_state["last"] >= 4.0):
+                    _advisor_state["last"] = now
+                    asyncio.create_task(
+                        _run_threat_assessment(simulated_minutes))
                 last_send_time = now
 
             await asyncio.sleep(STEP_SLEEP_S)
