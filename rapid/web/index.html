@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#14161a">
+<title>WILSON Rapid</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2c2 6 9 9 9 17a9 9 0 0 1-18 0c0-5 3-7 4-11 1 3 3 4 3 4s-1-6 2-10z' fill='%23ff6a1a'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="map"></div>
+
+<!-- Top bar: search + status -->
+<header id="topbar">
+  <div class="brand" title="WILSON Rapid — fire spread estimator">
+    <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M16 2c2 6 9 9 9 17a9 9 0 0 1-18 0c0-5 3-7 4-11 1 3 3 4 3 4s-1-6 2-10z" fill="#ff6a1a"/></svg>
+  </div>
+  <form id="search" autocomplete="off">
+    <input id="search-input" type="text" inputmode="text" placeholder="Coordinates (38.56, 21.94) or place name" aria-label="Coordinates or place name">
+    <button type="submit" class="btn">Go</button>
+  </form>
+  <div id="conf-pill" class="pill hidden" title="How much to trust this forecast"></div>
+  <button id="btn-new" class="btn ghost hidden" title="Start over with a new fire">New fire</button>
+</header>
+
+<!-- First-use hint -->
+<div id="hint" class="hint">Tap the map where the fire is <span>— or type coordinates above</span></div>
+
+<!-- Tool hint while drawing -->
+<div id="draw-bar" class="draw-bar hidden">
+  <span id="draw-text"></span>
+  <button id="draw-undo" class="btn ghost">Undo</button>
+  <button id="draw-cancel" class="btn ghost">Cancel</button>
+  <button id="draw-done" class="btn primary">Done</button>
+</div>
+
+<!-- Side / bottom panel with results -->
+<aside id="panel" class="hidden" aria-live="polite">
+  <div id="panel-grip" aria-hidden="true"></div>
+  <section id="headline" class="card"></section>
+  <section id="res-card" class="card">
+    <h2>Your resources</h2>
+    <div class="res-row" data-res="aircraft">
+      <svg viewBox="0 0 24 24"><path d="M2 13l8-2 3-8h2l-1 8 7 2v2l-7-1-1 5 2 1v1l-3-1-3 1v-1l2-1-1-5-7 1z"/></svg>
+      <span class="res-name">Aircraft</span><span class="res-use"></span>
+      <button class="step" data-d="-1" aria-label="fewer aircraft">−</button><b class="res-n">0</b><button class="step" data-d="1" aria-label="more aircraft">+</button>
+    </div>
+    <div class="res-row" data-res="trucks">
+      <svg viewBox="0 0 24 24"><path d="M2 7h11v9H2zM13 10h5l3 3v3h-8z"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>
+      <span class="res-name">Fire trucks</span><span class="res-use"></span>
+      <button class="step" data-d="-1" aria-label="fewer trucks">−</button><b class="res-n">0</b><button class="step" data-d="1" aria-label="more trucks">+</button>
+    </div>
+    <div class="res-row" data-res="dozers">
+      <svg viewBox="0 0 24 24"><path d="M3 15h13v4H3zM5 9h7v6H5zM16 8l5 3v8h-5"/></svg>
+      <span class="res-name">Bulldozers</span><span class="res-use"></span>
+      <button class="step" data-d="-1" aria-label="fewer bulldozers">−</button><b class="res-n">0</b><button class="step" data-d="1" aria-label="more bulldozers">+</button>
+    </div>
+    <div id="plan-notes"></div>
+  </section>
+  <section id="view-switch" class="card">
+    <h2>Map shows</h2>
+    <div class="seg" id="mode-seg">
+      <button data-mode="zones" class="on">Most likely</button>
+      <button data-mode="prob">Chance of fire</button>
+      <button data-mode="danger">Danger</button>
+    </div>
+    <div id="danger-ctl" class="hidden"></div>
+    <div class="seg hidden" id="plan-seg" style="margin-top:8px">
+      <button data-view="base" class="on">No action</button>
+      <button data-view="plan">With the plan</button>
+    </div>
+    <div id="prob-ctl" class="hidden">
+      <div class="slider-row"><span>Fire by</span><input type="range" id="prob-hour" min="1" max="6" step="1" value="3"><b id="prob-hour-text"></b></div>
+      <div class="prob-legend"><span>10%</span><i></i><span>100%</span></div>
+      <div class="scen-row">
+        <span class="muted small">Scenarios</span>
+        <div class="chips small-chips" id="scen-n"><button data-n="24">24</button><button data-n="100">100</button><button data-n="200">200</button></div>
+      </div>
+      <label class="check"><input type="checkbox" id="scen-wide"> Not sure about wind / fuel — explore a wider range</label>
+    </div>
+    <div id="plan-gain" class="muted small"></div>
+  </section>
+  <section class="card"><h2>Places at risk</h2><div id="places"></div></section>
+  <section class="card"><h2>Recommended plan</h2><div id="actions"></div></section>
+  <section class="card" id="weather-card"></section>
+  <section class="card"><h2>Forecast quality</h2><div id="quality"></div></section>
+  <section class="card small muted" id="sources"></section>
+</aside>
+
+<!-- Bottom toolbar -->
+<nav id="toolbar" class="hidden">
+  <button data-tool="perimeter" title="Draw the area that has burned — the forecast adjusts to it"><svg viewBox="0 0 24 24"><path d="M4 7l6-3 8 3 2 8-6 5-9-2z" /></svg><span>Burned area</span></button>
+  <button data-tool="wind" title="Report wind measured on site"><svg viewBox="0 0 24 24"><path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h8"/></svg><span>Local wind</span></button>
+  <button data-tool="protect" title="Mark a place to protect and get its time to impact"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/></svg><span>Protect place</span></button>
+  <button data-tool="firebreak" title="Draw your own firebreak / dead zone"><svg viewBox="0 0 24 24"><path d="M3 20L21 4" stroke-dasharray="3 2"/></svg><span>Firebreak</span></button>
+  <button data-tool="air_drop" title="Place a water / retardant drop"><svg viewBox="0 0 24 24"><path d="M12 3c3 5 6 8 6 11a6 6 0 0 1-12 0c0-3 3-6 6-11z"/></svg><span>Water drop</span></button>
+  <button data-tool="truck" title="Place a fire truck"><svg viewBox="0 0 24 24"><path d="M2 7h11v9H2zM13 10h5l3 3v3h-8zM6 19a2 2 0 1 0 0-.1M17 19a2 2 0 1 0 0-.1"/></svg><span>Truck</span></button>
+  <button data-tool="refresh" title="Update the forecast to the current time"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></svg><span>Update</span></button>
+</nav>
+
+<!-- Legend -->
+<div id="legend" class="hidden"></div>
+
+<!-- Dialogs -->
+<div id="dlg-start" class="dlg hidden" role="dialog" aria-modal="true" aria-labelledby="dlg-start-title">
+  <h2 id="dlg-start-title">When did the fire start?</h2>
+  <div class="chips" id="start-ago">
+    <button data-ago="0" class="on">Just now</button>
+    <button data-ago="30">30 min ago</button>
+    <button data-ago="60">1 h ago</button>
+    <button data-ago="120">2 h ago</button>
+    <button data-ago="180">3 h ago</button>
+  </div>
+  <h3>Forecast for the next</h3>
+  <div class="chips" id="start-hours">
+    <button data-h="3">3 h</button>
+    <button data-h="6" class="on">6 h</button>
+    <button data-h="12">12 h</button>
+  </div>
+  <div class="row">
+    <button class="btn ghost" id="start-cancel">Cancel</button>
+    <button class="btn primary big" id="start-go">Start forecast</button>
+  </div>
+</div>
+
+<div id="dlg-wind" class="dlg hidden" role="dialog" aria-modal="true" aria-labelledby="dlg-wind-title">
+  <h2 id="dlg-wind-title">Wind measured here</h2>
+  <h3>Wind blows FROM</h3>
+  <div class="compass" id="wind-dir">
+    <button data-d="315">NW</button><button data-d="0">N</button><button data-d="45">NE</button>
+    <button data-d="270">W</button><span class="c-mid">⊕</span><button data-d="90">E</button>
+    <button data-d="225">SW</button><button data-d="180">S</button><button data-d="135">SE</button>
+  </div>
+  <h3>Speed <b id="wind-val">20</b> km/h</h3>
+  <input type="range" id="wind-speed" min="0" max="100" step="5" value="20">
+  <div class="row two">
+    <label>Temp °C <input type="number" id="wind-temp" placeholder="optional"></label>
+    <label>Humidity % <input type="number" id="wind-rh" placeholder="optional"></label>
+  </div>
+  <div class="row">
+    <button class="btn ghost" data-close>Cancel</button>
+    <button class="btn primary big" id="wind-go">Use this wind</button>
+  </div>
+</div>
+
+<div id="dlg-name" class="dlg hidden" role="dialog" aria-modal="true" aria-labelledby="dlg-name-title">
+  <h2 id="dlg-name-title">Name this place</h2>
+  <input type="text" id="name-input" placeholder="e.g. Farmhouse, camp site, school">
+  <div class="row">
+    <button class="btn ghost" data-close>Cancel</button>
+    <button class="btn primary big" id="name-go">Protect it</button>
+  </div>
+</div>
+
+<div id="busy" class="hidden"><div class="spinner"></div><div id="busy-text">Working…</div></div>
+<div id="toast" class="hidden"></div>
+
+<script src="vendor/maplibre-gl.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

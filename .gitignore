@@ -25,3 +25,8 @@ report/*.toc
 # Secrets
 api_key.txt
 .env
+
+# WILSON Rapid (C++) build output and runtime data
+rapid/build/
+rapid/cache/
+rapid/dropin/
