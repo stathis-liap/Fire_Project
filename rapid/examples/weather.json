@@ -1,0 +1,8 @@
+{
+  "type": "weather",
+  "wind_kmh": 35,
+  "wind_dir_deg": 330,
+  "temp_c": 36,
+  "rh": 15,
+  "source": "Engine 12 handheld anemometer"
+}

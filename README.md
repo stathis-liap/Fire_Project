@@ -6,6 +6,8 @@ A drone-assisted wildfire digital twin for the Mediterranean. WILSON ingests rea
 
 > New 3D computational-geometry features are documented in `3D_README.md` and a short quick-start guide is available in `README_3D.md`.
 
+> **WILSON Rapid** (`rapid/`) is a lightweight C++ rapid-response estimator for crews in the field. Drop a pin and it gives you a spread forecast in seconds, time-to-impact for villages and roads with confidence levels, recommended firebreaks / water drops / truck positions with what-if simulation, and calibration from the observed burned area or drone detections. See [`rapid/README.md`](rapid/README.md).
+
 ---
 
 ## Table of Contents
