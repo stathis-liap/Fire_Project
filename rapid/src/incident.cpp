@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <ctime>
 #include <future>
 #include <map>
@@ -109,6 +110,49 @@ DestStat dest_stat(const EnsembleResult& E, const Destination& d, float t_end) {
     return s;
 }
 
+// Forecast times (minutes after now) drawn as fire-front lines and offered
+// as probability frames: every 30 min up to 3 h, hourly up to 24 h, then
+// every 2 h — at most 24 frames, always ending exactly at the horizon.
+std::vector<float> frame_offsets(double horizon_h) {
+    const double H = horizon_h * 60.0;
+    const double step = horizon_h <= 3 ? 30 : horizon_h <= 24 ? 60 : 120;
+    std::vector<float> out;
+    for (double t = step; t < H - 1; t += step) out.push_back(float(t));
+    out.push_back(float(H));
+    return out;
+}
+
+constexpr double kMinHorizonH = 0.5, kMaxHorizonH = 48.0;
+constexpr double kHistoryWeight = 0.12;  // weight of an observed step 0 h old relative to the newest (benchmarked)
+
+// Moves a fitted observation step onto a new (larger) grid.
+CalibrationInterval remap_interval(const CalibrationInterval& iv, const Grid& from, const Grid& to) {
+    CalibrationInterval o;
+    o.t_obs = iv.t_obs;
+    o.weight = iv.weight;
+    auto move = [&](int c) {
+        int r, k;
+        return to.locate(from.center_of(c / from.cols, c % from.cols), r, k) ? to.idx(r, k) : -1;
+    };
+    std::map<int, float> src;
+    for (auto [c, t] : iv.sources) {
+        int n = move(c);
+        if (n >= 0 && (!src.count(n) || t < src[n])) src[n] = t;
+    }
+    o.sources.assign(src.begin(), src.end());
+    for (int c : iv.hotspots)
+        if (int n = move(c); n >= 0) o.hotspots.push_back(n);
+    if (!iv.observed.empty()) {
+        o.observed.assign(to.size(), 0);
+        for (int r = 0; r < to.rows; ++r)
+            for (int c = 0; c < to.cols; ++c) {
+                int rr, cc;
+                if (from.locate(to.center_of(r, c), rr, cc) && iv.observed[from.idx(rr, cc)]) o.observed[to.idx(r, c)] = 1;
+            }
+    }
+    return o;
+}
+
 WeatherSeries default_weather(double from_epoch) {
     WeatherSeries w;
     for (int h = -24; h < 48; ++h) w.hourly.push_back({from_epoch + h * 3600.0, 5.0, 0.0, 30.0, 25.0});
@@ -174,12 +218,15 @@ json Incident::start(const json& req) {
 
     const double now = now_epoch();
     const double ago = std::clamp(req.value("started_min_ago", 0.0), 0.0, 24 * 60.0);
-    horizon_h_ = std::clamp(req.value("horizon_h", 6.0), 1.0, 24.0);
+    horizon_h_ = std::clamp(req.value("horizon_h", 6.0), kMinHorizonH, kMaxHorizonH);
     t0_epoch_ = now - ago * 60.0;
     ignition_ = pos;
     params_ = SpreadParams{};
     calibrated_ = false;
     calibration_ = nullptr;
+    cal_history_.clear();
+    cal_spread_ = Uncertainty{};
+    cal_epoch_ = 0;
     obs_.clear();
     dests_.clear();
     recs_.clear();
@@ -331,6 +378,16 @@ void Incident::rebuild_domain_locked(double radius_m) {
         if (it == cells.end() || t < it->second) cells[k] = t;
     }
     fc_sources_.assign(cells.begin(), cells.end());
+    for (auto& iv : cal_history_) iv = remap_interval(iv, old, g);
+    if (params_.local_ros && params_.local_ros->size() == old.size()) {
+        auto f = std::make_shared<std::vector<float>>(g.size(), 1.f);
+        for (int r = 0; r < g.rows; ++r)
+            for (int c = 0; c < g.cols; ++c) {
+                int rr, cc;
+                if (old.locate(g.center_of(r, c), rr, cc)) (*f)[g.idx(r, c)] = (*params_.local_ros)[old.idx(rr, cc)];
+            }
+        params_.local_ros = std::move(f);
+    }
     for (auto& d : dests_)
         if (d.user) {
             d.cells.clear();
@@ -421,13 +478,36 @@ Uncertainty Incident::uncertainty_locked(double now) const {
     if (local_recent) { u.wind_speed_sigma = 0.12; u.wind_dir_sigma = 8; u.moisture_sigma = 0.008; }
     else if (wx_.source.rfind("default", 0) == 0) { u.wind_speed_sigma = 0.4; u.wind_dir_sigma = 40; u.moisture_sigma = 0.02; }
     else { u.wind_speed_sigma = 0.22; u.wind_dir_sigma = 18; }
-    double score = calibrated_ ? calibration_.value("score_after", 0.0) : 0.0;
-    u.ros_sigma = calibrated_ ? 0.10 + 0.25 * (1.0 - score) : 0.30;
+    u.ros_sigma = 0.30;
+    // Land-cover and fuel-load errors vary from place to place: every
+    // scenario gets its own patchy spread-rate field on top of the global
+    // perturbations.
+    u.patch_sigma = 0.3;
+    u.patch_m = 600;
+    if (calibrated_) {
+        // The calibration says how tightly the observations pin each input
+        // down (×1.5), combined with floors for what a fit cannot remove —
+        // gusts, shifts and fuel-map errors ahead of the front.  The floors
+        // were set on synthetic fires with mis-mapped fuel, where narrower
+        // ensembles scored clearly worse (Brier) at +1 h and +2 h.  The
+        // spread fades back to the uncalibrated one over ~6 h as the fitted
+        // biases go stale.
+        const double age = std::clamp((now - cal_epoch_) / (6 * 3600.0), 0.0, 1.0);
+        auto fit = [&](double post, double floor, double uncal) {
+            double v = std::hypot(1.5 * post, floor);
+            return v + age * std::max(0.0, uncal - v);
+        };
+        u.ros_sigma = fit(std::min(cal_spread_.ros_sigma, 0.5), 0.15, 0.30);
+        u.wind_speed_sigma = fit(std::min(cal_spread_.wind_speed_sigma, 0.4), local_recent ? 0.15 : 0.25, u.wind_speed_sigma);
+        u.wind_dir_sigma = fit(std::min(cal_spread_.wind_dir_sigma, 30.0), local_recent ? 12.0 : 20.0, u.wind_dir_sigma);
+        u.moisture_sigma = fit(std::min(cal_spread_.moisture_sigma, 0.02), 0.015, u.moisture_sigma);
+    }
     if (wide_) {  // "not sure about the inputs": explore a much wider range
         u.wind_speed_sigma *= 1.7;
         u.wind_dir_sigma *= 1.7;
         u.moisture_sigma *= 1.7;
         u.ros_sigma *= 1.7;
+        u.patch_sigma *= 1.7;
     }
     return u;
 }
@@ -464,7 +544,8 @@ void Incident::recompute_locked() {
     {
         std::ostringstream key;
         key << g.rows << 'x' << g.cols << '@' << g.north << ',' << g.west << '|' << params_.ros_mult << ','
-            << params_.wind_mult << ',' << params_.wind_dir_offset << ',' << params_.moisture_offset << '|'
+            << params_.wind_mult << ',' << params_.wind_dir_offset << ',' << params_.moisture_offset << ','
+            << static_cast<const void*>(params_.local_ros.get()) << '|'
             << wx_.local.size() << '|' << dests_.size() << ':' << (dests_.empty() ? "" : dests_.back().id) << '|'
             << int(t_now_ / 60) << '-' << int(t_end_ / 60) << '|' << obs_.size();
         if (key.str() != danger_key_) {
@@ -536,8 +617,22 @@ void Incident::recompute_locked() {
     if (!L_->terrain_ok) { q *= 0.85; reasons.push_back("Terrain missing — flat ground assumed."); }
     if (calibrated_) {
         double s = calibration_.value("score_after", 0.0);
-        q *= 0.75 + 0.25 * s;
-        reasons.push_back("Adjusted to the burned area seen on the ground (" + std::to_string(int(std::round(s * 100))) + "% match).");
+        const json& chk = calibration_["forecast_check"];
+        double fit = s;
+        if (chk.is_object()) fit = 0.5 * (s + chk.value("score", s));  // how the last forecast actually did counts too
+        q *= 0.7 + 0.3 * fit;
+        std::string r = "Adjusted to the burned area seen on the ground (" + std::to_string(int(std::round(s * 100))) + "% match";
+        double fe = calibration_.value("front_err_m", -1.0);
+        if (fe >= 0) r += ", fire edge within ~" + std::to_string(int(round_to(fe, 10))) + " m";
+        reasons.push_back(r + ").");
+        if (chk.is_object()) {
+            double ce = chk.value("front_err_m", -1.0);
+            reasons.push_back("Last check: the forecast made " + fmt_duration(chk.value("lead_min", 0.0)) +
+                              " before the latest observation " +
+                              (ce >= 0 ? "put the fire edge within ~" + std::to_string(int(round_to(ce, 10))) + " m of it"
+                                       : "matched it") +
+                              " (" + std::to_string(int(std::round(chk.value("score", 0.0) * 100))) + "% match).");
+        }
     } else {
         q *= 0.85;
         reasons.push_back("Not yet checked against the real fire — mark the burned area to improve accuracy.");
@@ -721,21 +816,59 @@ void Incident::recompute_locked() {
     out["confidence"] = {{"score", std::round(conf_score)}, {"grade", grade_of(conf_score)}, {"reasons", reasons}};
     out["calibration"] = calibration_;
 
+    const std::vector<float> frames = frame_offsets(horizon_h_);
+    json frame_epochs = json::array();
+    for (float f : frames) frame_epochs.push_back(now + f * 60.0);
     auto layer_json = [&](const EnsembleResult& E) {
         json iso = {{"type", "FeatureCollection"}, {"features", json::array()}};
         if (t_now_ > fc_time_ + 5 || fc_time_ > 0)
             for (auto& line : contour_lines(g, E.p50, t_now_))
                 iso["features"].push_back(feature(geo_line(line), {{"hours", 0}, {"label", "now"}}));
-        for (int h = 1; h <= int(horizon_h_); ++h)
-            for (auto& line : contour_lines(g, E.p50, t_now_ + h * 60.f))
-                iso["features"].push_back(feature(geo_line(line), {{"hours", h}, {"label", "+" + std::to_string(h) + " h"},
-                                                                   {"clock", clock_tok(now + h * 3600.0)}}));
+        std::vector<float> times;
+        for (float f : frames) {
+            times.push_back(t_now_ + f);
+            for (auto& line : contour_lines(g, E.p50, t_now_ + f))
+                iso["features"].push_back(feature(geo_line(line), {{"hours", f / 60.0}, {"label", "+" + fmt_duration(f)},
+                                                                   {"clock", clock_tok(now + f * 60.0)}}));
+        }
         json prob = json::array();
-        for (auto& u : render_prob_pngs(g, E.arrival, t_now_, int(horizon_h_))) prob.push_back(u);
+        for (auto& u : render_prob_pngs(g, E.arrival, times)) prob.push_back(u);
         return json{{"overlay", {{"url", render_zones_png(g, E.p50, E.p10, t_now_, t_end_)}, {"coordinates", coords}}},
                     {"isochrones", iso}, {"probability", prob}};
     };
     out["base"] = layer_json(base_);
+    out["frames"] = frame_epochs;
+    {
+        // Local wind (terrain-steered, with slope winds) on an 18×18 lattice,
+        // now and at every frame time, for the wind-arrow layer.
+        auto tic_w = std::chrono::steady_clock::now();
+        const int n = 18;
+        std::vector<int> cells;
+        json pts = json::array();
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) {
+                int r = int((i + 0.5) * g.rows / n), c = int((j + 0.5) * g.cols / n);
+                cells.push_back(g.idx(r, c));
+                LatLon p = g.center_of(r, c);
+                pts.push_back({round_to(p.lon, 1e-5), round_to(p.lat, 1e-5)});
+            }
+        json wf = json::array();
+        std::vector<float> sp, to;
+        std::vector<float> wtimes = {0.f};
+        wtimes.insert(wtimes.end(), frames.begin(), frames.end());
+        for (float f : wtimes) {
+            solver_->wind_at(t0_epoch_, t_now_ + f, params_, cells, sp, to);
+            json kmh = json::array(), dir = json::array();
+            for (size_t k = 0; k < cells.size(); ++k) {
+                kmh.push_back(std::lround(sp[k] * 3.6));
+                dir.push_back(std::lround(to[k]));
+            }
+            wf.push_back({{"epoch", now + f * 60.0}, {"kmh", kmh}, {"to", dir}});
+        }
+        out["wind_field"] = {{"points", pts}, {"frames", wf},
+                             {"solver", L_->wind.active() ? "terrain (mass-consistent + lee + slope winds)" : "uniform"},
+                             {"ms", std::round(ms_since(tic_w) + L_->wind.runtime_ms)}};
+    }
     {
         // Per place: the 1-hour danger zone — ground from which a fire would
         // reach it within an hour — and the direction the threat comes from.
@@ -1033,6 +1166,8 @@ json Incident::observe_locked(const json& obs) {
     ci.sources = fc_sources_;
     ci.t_obs = t_obs;
     ci.start = params_;
+    // A hotspot hull is too rough an outline to learn direction-by-direction corrections from.
+    ci.local_correction = kind == "perimeter";
     Observation o{kind, epoch, source, {}, {}};
     std::vector<std::pair<int, float>> new_sources;
 
@@ -1102,16 +1237,52 @@ json Incident::observe_locked(const json& obs) {
     // Calibrate only when the fire had time to move since the last known state.
     if (t_obs - fc_time_ >= 10) {
         set_status("Matching the model to the real fire…");
+        // Earlier observed steps take part with a small, recency-decaying
+        // weight: they steady the fit against one rough sketch, but the
+        // fire has since moved into other fuel and terrain, so the newest
+        // step dominates (benchmarked: heavier history hurts the 1–2 h forecast).
+        for (const auto& h : cal_history_) {
+            CalibrationInterval iv = h;
+            iv.weight = kHistoryWeight * std::pow(0.5, (t_obs - h.t_obs) / 120.0);
+            ci.history.push_back(std::move(iv));
+        }
         CalibrationResult cr = calibrate(*solver_, t0_epoch_, ci);
         params_ = cr.params;
         calibrated_ = true;
+        cal_spread_ = cr.spread;
+        cal_epoch_ = epoch;
+        cal_history_.push_back({ci.sources, ci.t_obs, ci.observed, ci.hotspots, 1.0});
+        if (cal_history_.size() > 4) cal_history_.erase(cal_history_.begin());
+        auto pct = [](double v) { return std::to_string(int(std::round(v * 100))); };
+        // The parameters in use until now made a forecast for this moment:
+        // how it compares with what was seen is an honest out-of-sample check.
+        json check = {{"lead_min", std::round(t_obs - fc_time_)}, {"score", std::round(cr.before.score * 100) / 100},
+                      {"growth_iou", std::round(cr.before.growth_iou * 100) / 100},
+                      {"front_err_m", std::round(cr.before.front_err_m)}};
+        std::string text = "Model matched to the observed fire: " + pct(cr.score_before) + "% → " + pct(cr.score_after) +
+                           "% agreement on the new growth";
+        if (cr.after.front_err_m >= 0) text += ", fire edge within ~" + std::to_string(int(round_to(cr.after.front_err_m, 10))) + " m";
+        if (cr.params.local_ros) {
+            char buf[96];
+            std::snprintf(buf, sizeof buf, ". Near the front the spread is corrected ×%.1f–×%.1f by direction", cr.local_min, cr.local_max);
+            text += buf;
+        }
         calibration_ = {{"score_before", std::round(cr.score_before * 100) / 100},
                         {"score_after", std::round(cr.score_after * 100) / 100},
+                        {"growth_iou", std::round(cr.after.growth_iou * 100) / 100},
+                        {"timing", std::round(cr.after.timing * 100) / 100},
+                        {"front_err_m", std::round(cr.after.front_err_m)},
+                        {"forecast_check", check},
                         {"ros_mult", cr.params.ros_mult}, {"wind_mult", cr.params.wind_mult},
                         {"wind_dir_offset", cr.params.wind_dir_offset}, {"moisture_offset", cr.params.moisture_offset},
+                        {"spread", {{"ros_sigma", cr.spread.ros_sigma}, {"wind_speed_sigma", cr.spread.wind_speed_sigma},
+                                    {"wind_dir_sigma", cr.spread.wind_dir_sigma}, {"moisture_sigma", cr.spread.moisture_sigma}}},
+                        {"intervals", 1 + ci.history.size()},
+                        {"local_correction", cr.params.local_ros ? json{{"min", std::round(cr.local_min * 100) / 100},
+                                                                         {"max", std::round(cr.local_max * 100) / 100}}
+                                                                  : json(nullptr)},
                         {"evaluations", cr.evaluations}, {"runtime_ms", std::round(cr.runtime_ms)}, {"epoch", epoch},
-                        {"text", "Model matched to the observed fire: " + std::to_string(int(std::round(cr.score_before * 100))) +
-                                     "% → " + std::to_string(int(std::round(cr.score_after * 100))) + "% agreement."}};
+                        {"text", text + "."}};
         result["calibration"] = calibration_;
     }
     // Forecast continues from what was observed.
@@ -1213,7 +1384,7 @@ json Incident::set_plan(const json& req) {
 json Incident::refresh(const json& req) {
     std::lock_guard<std::mutex> lk(work_mu_);
     if (!active_) return {{"error", "No active fire."}};
-    if (req.contains("horizon_h")) horizon_h_ = std::clamp(req["horizon_h"].get<double>(), 1.0, 24.0);
+    if (req.contains("horizon_h")) horizon_h_ = std::clamp(req["horizon_h"].get<double>(), kMinHorizonH, kMaxHorizonH);
     if (req.value("refetch_weather", false)) {
         FetchContext ctx{opt_.cache_dir, opt_.offline};
         WeatherSeries w;
@@ -1257,6 +1428,7 @@ json Incident::reset() {
     dests_.clear();
     manual_.clear();
     recs_.clear();
+    cal_history_.clear();
     publish({{"status", "idle"}});
     return snapshot();
 }

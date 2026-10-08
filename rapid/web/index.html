@@ -60,6 +60,12 @@
     <div id="plan-notes"></div>
   </section>
   <section id="view-switch" class="card">
+    <form class="horizon-row" id="horizon-form">
+      <span>Forecast for the next</span>
+      <input type="number" id="horizon-input" min="0.5" max="48" step="0.5" inputmode="decimal" aria-label="Forecast length in hours">
+      <span>h</span>
+      <button type="submit" class="btn ghost">Apply</button>
+    </form>
     <h2>Map shows</h2>
     <div class="seg" id="mode-seg">
       <button data-mode="zones" class="on">Most likely</button>
@@ -71,12 +77,13 @@
       <button data-view="base" class="on">No action</button>
       <button data-view="plan">With the plan</button>
     </div>
+    <label class="check"><input type="checkbox" id="show-wind"> Show wind on the ground (shaped by terrain)</label>
     <div id="prob-ctl" class="hidden">
-      <div class="slider-row"><span>Fire by</span><input type="range" id="prob-hour" min="1" max="6" step="1" value="3"><b id="prob-hour-text"></b></div>
+      <div class="slider-row"><span>Fire by</span><input type="range" id="prob-hour" min="1" max="6" step="1" value="2"><b id="prob-hour-text"></b></div>
       <div class="prob-legend"><span>10%</span><i></i><span>100%</span></div>
       <div class="scen-row">
         <span class="muted small">Scenarios</span>
-        <div class="chips small-chips" id="scen-n"><button data-n="24">24</button><button data-n="100">100</button><button data-n="200">200</button></div>
+        <div class="chips small-chips" id="scen-n"><button data-n="64">64</button><button data-n="100">100</button><button data-n="200">200</button></div>
       </div>
       <label class="check"><input type="checkbox" id="scen-wide"> Not sure about wind / fuel — explore a wider range</label>
     </div>
@@ -115,10 +122,14 @@
   </div>
   <h3>Forecast for the next</h3>
   <div class="chips" id="start-hours">
+    <button data-h="1">1 h</button>
+    <button data-h="2">2 h</button>
     <button data-h="3">3 h</button>
     <button data-h="6" class="on">6 h</button>
     <button data-h="12">12 h</button>
+    <button data-h="24">24 h</button>
   </div>
+  <label class="hours-custom">or exactly <input type="number" id="start-hours-custom" min="0.5" max="48" step="0.5" inputmode="decimal" placeholder="e.g. 4.5"> hours (0.5–48)</label>
   <div class="row">
     <button class="btn ghost" id="start-cancel">Cancel</button>
     <button class="btn primary big" id="start-go">Start forecast</button>

@@ -31,7 +31,7 @@ struct Args {
     int port = 8090;
     std::string web, cache = "cache", dropin = "dropin";
     bool offline = false;
-    int members = 24;
+    int members = 64;
     std::string forecast;  // "lat,lon" → CLI mode
     double ago = 0, hours = 6;
 };
@@ -40,14 +40,14 @@ void usage() {
     std::puts(
         "WILSON Rapid — rapid-response wildfire spread estimator\n\n"
         "  wilson_rapid [options]\n"
-        "  wilson_rapid --forecast LAT,LON [--ago MIN] [--hours H]\n\n"
+        "  wilson_rapid --forecast LAT,LON [--ago MIN] [--hours H]   (H: any forecast length, 0.5–48 h)\n\n"
         "  --host ADDR      listen address (default 127.0.0.1; use 0.0.0.0 to serve tablets on the LAN)\n"
         "  --port N         HTTP port (default 8090)\n"
         "  --web DIR        UI directory (default: auto-detect rapid/web)\n"
         "  --cache DIR      map/weather cache (default ./cache)\n"
         "  --dropin DIR     folder watched for drone/crew observation files (default ./dropin)\n"
         "  --offline        never touch the network; use cached data only\n"
-        "  --members N      ensemble size for confidence (default 24)\n");
+        "  --members N      ensemble size for confidence (default 64)\n");
 }
 
 Args parse(int argc, char** argv) {
@@ -64,7 +64,7 @@ Args parse(int argc, char** argv) {
         else if (s == "--cache") a.cache = next();
         else if (s == "--dropin") a.dropin = next();
         else if (s == "--offline") a.offline = true;
-        else if (s == "--members") a.members = std::clamp(std::stoi(next()), 4, 128);
+        else if (s == "--members") a.members = std::clamp(std::stoi(next()), 4, 200);
         else if (s == "--forecast") a.forecast = next();
         else if (s == "--ago") a.ago = std::stod(next());
         else if (s == "--hours") a.hours = std::stod(next());
@@ -240,7 +240,7 @@ int run_cli(const Args& a) {
     }
     const auto& s = r["summary"];
     const auto& w = r["weather"]["now"];
-    std::printf("\nFIRE FORECAST  (next %.0f h, confidence %s %d%%)\n", r["incident"]["horizon_h"].get<double>(),
+    std::printf("\nFIRE FORECAST  (next %g h, confidence %s %d%%)\n", r["incident"]["horizon_h"].get<double>(),
                 r["confidence"]["grade"].get<std::string>().c_str(), r["confidence"]["score"].get<int>());
     std::printf("  Spreading towards the %s at up to %.1f km/h; flames up to %.1f m.\n",
                 s["direction_text"].get<std::string>().c_str(), s["head_speed_kmh"].get<double>(), s["max_flame_m"].get<double>());

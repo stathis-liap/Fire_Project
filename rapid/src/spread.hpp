@@ -10,10 +10,12 @@
 // time-to-impact for free.
 //
 // Weather is time dependent: the ellipse of each cell is evaluated with the
-// weather of the hour in which the fire front reaches it.
+// weather of the hour in which the fire front reaches it, and the wind is
+// local to the cell (terrain steering, lee shelter, slope winds; windfield.hpp).
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,7 +32,19 @@ struct SpreadParams {
     double wind_mult = 1.0;        // forecast wind speed bias
     double wind_dir_offset = 0.0;  // forecast wind direction bias (deg)
     double moisture_offset = 0.0;  // fine dead fuel moisture bias (fraction)
+    // Local spread correction learned from the latest observed growth: per
+    // cell multiplier (1 = none), strongest near the observed front and
+    // fading with distance.  Shared, never modified once built; may be null.
+    std::shared_ptr<const std::vector<float>> local_ros;
+    // Patchy spread-rate noise (ensemble members): a smooth random field with
+    // log-σ `patch_sigma` and patches of ~`patch_m` metres, standing in for
+    // land-cover and fuel-load errors that vary from place to place.
+    uint32_t patch_seed = 0;
+    float patch_sigma = 0, patch_m = 1000;
 };
+
+// Smooth unit-variance random field (value noise on a patch_m lattice).
+float patch_noise(uint32_t seed, double x_m, double y_m, double patch_m);
 
 enum class IvKind { Firebreak = 0, AirDrop = 1, Truck = 2 };
 
@@ -96,6 +110,11 @@ class SpreadSolver {
     // used for sizing the domain and for plain-language summaries.
     double head_ros(int cell, double t0_epoch, double t_min, const SpreadParams& p, double* flame_m = nullptr,
                     double* dir_deg = nullptr) const;
+
+    // Local 10 m wind (speed m/s, direction it blows TOWARDS) at the given
+    // cells at time t_min — terrain-steered, lee-sheltered, with slope winds.
+    void wind_at(double t0_epoch, double t_min, const SpreadParams& p, const std::vector<int>& cells,
+                 std::vector<float>& speed_ms, std::vector<float>& to_deg) const;
 
     // Fire potential everywhere: head-fire spread rate (km/h), flame length
     // and spread direction at the worst hour between t_from and t_to

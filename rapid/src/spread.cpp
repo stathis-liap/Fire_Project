@@ -58,8 +58,10 @@ double length_to_breadth(double eff_wind_mph) {
 
 // Hourly weather resolved for one run (params applied).
 struct HourWx {
-    double u10_ftmin;  // 10 m wind speed (ft/min) after wind_mult
-    double wind_to;    // direction the wind blows towards (deg)
+    double amb_u, amb_v;  // ambient 10 m wind (m/s, east/north, blowing towards) after wind_mult/offset
+    int bin0 = 0, bin1 = 0;  // lee-shelter direction bins and weight
+    float wbin = 0;
+    ThermalHour th;       // slope winds for this hour
     std::vector<RothermelBase> base;  // [fuel * kMoistClasses + mclass]
 };
 
@@ -80,11 +82,17 @@ class RunCtx {
         int K = std::max(1, int(std::ceil(std::max(0.0, t_end) / 60.0)) + 1);
         hours_.resize(K);
         const auto& ft = fuel_table();
+        const double lon = L.grid.center_of(L.grid.rows / 2, L.grid.cols / 2).lon;
         for (int k = 0; k < K; ++k) {
-            WxSample s = wx.at(t0_epoch + k * 3600.0 + 1800.0);
+            const double epoch = t0_epoch + k * 3600.0 + 1800.0;
+            WxSample s = wx.at(epoch);
             HourWx& h = hours_[k];
-            h.u10_ftmin = std::max(0.0, s.wind_ms * p.wind_mult) * kMsToFtMin;
-            h.wind_to = std::fmod(s.wind_from + 180.0 + p.wind_dir_offset + 720.0, 360.0);
+            const double speed = std::max(0.0, s.wind_ms * p.wind_mult);
+            const double from = std::fmod(s.wind_from + p.wind_dir_offset + 720.0, 360.0);
+            h.amb_u = -speed * std::sin(from * kDeg);
+            h.amb_v = -speed * std::cos(from * kDeg);
+            shelter_bins(from, h.bin0, h.bin1, h.wbin);
+            h.th = thermal_hour(epoch, lon, speed);
             double mf0 = emc_fraction(s.temp_c, s.rh) + p.moisture_offset;
             h.base.resize(ft.size() * kMoistClasses);
             for (size_t f = 0; f < ft.size(); ++f)
@@ -115,14 +123,17 @@ class RunCtx {
         const RothermelBase& b = h.base[f * kMoistClasses + std::clamp<int>(L_.moist_adj[cell], 0, kMoistClasses - 1)];
         if (b.r0_ftmin <= 0) return e;
 
-        double u = h.u10_ftmin * rf.waf * L_.wind_mult[cell];
+        double wu, wv, up_s, up_c;
+        double w10 = local_wind(cell, h, wu, wv, up_s, up_c);
+        double u = w10 * kMsToFtMin * rf.waf;
         u = std::min(u, 96.8 * std::cbrt(b.ir));  // wind limit (Andrews et al. 2013)
         double phi_w = u > 0 ? rf.C * std::pow(u, rf.B) * std::pow(rf.rel_beta, -rf.E) : 0.0;
         double tan_s = L_.slope_tan[cell];
         double phi_s = rf.slope_k * tan_s * tan_s;
 
-        double wx = phi_w * std::sin(h.wind_to * kDeg) + phi_s * std::sin(L_.upslope[cell] * kDeg);
-        double wy = phi_w * std::cos(h.wind_to * kDeg) + phi_s * std::cos(L_.upslope[cell] * kDeg);
+        double wdx = w10 > 1e-9 ? wu / w10 : 0.0, wdy = w10 > 1e-9 ? wv / w10 : 0.0;
+        double wx = phi_w * wdx + phi_s * up_s;
+        double wy = phi_w * wdy + phi_s * up_c;
         double phi_e = std::hypot(wx, wy);
         e.theta = float(phi_e > 1e-9 ? std::fmod(std::atan2(wx, wy) / kDeg + 360.0, 360.0) : 0.0);
         e.st = float(std::sin(e.theta * kDeg));
@@ -137,7 +148,7 @@ class RunCtx {
         // Crown fire where the surface fire is intense enough to reach the canopy.
         if (rf.cbh > 0) {
             double surface_kwm = 3.4613 * e.k_int * r_ftmin;
-            double u10_kmh = h.u10_ftmin / kMsToFtMin * 3.6 * L_.wind_mult[cell];
+            double u10_kmh = w10 * 3.6;
             CrownResult cr = crown_fire(rf, surface_kwm, u10_kmh, b.mf);
             double r_crown = cr.ros_mmin * p_.ros_mult;
             if (cr.crowning && r_crown > e.rmax) {
@@ -149,7 +160,31 @@ class RunCtx {
             }
         }
         e.ecc = float(std::sqrt(lb * lb - 1.0) / lb);
+        if (p_.local_ros && p_.local_ros->size() == L_.grid.size()) e.rmax *= (*p_.local_ros)[cell];
+        if (p_.patch_sigma > 0) {
+            const int r = cell / L_.grid.cols, c = cell % L_.grid.cols;
+            double z = patch_noise(p_.patch_seed, c * L_.grid.cell_m, r * L_.grid.cell_m, p_.patch_m);
+            e.rmax *= float(std::exp(p_.patch_sigma * z - 0.5 * p_.patch_sigma * p_.patch_sigma));
+        }
         return e;
+    }
+
+    // Local 10 m wind at a cell (m/s, east/north components, blowing towards):
+    // terrain-steered ambient wind + lee shelter + thermal slope wind.
+    // Returns the speed; also hands back sin/cos of the upslope bearing.
+    double local_wind(int cell, const HourWx& h, double& wu, double& wv, double& up_s, double& up_c) const {
+        if (L_.wind.active()) L_.wind.local(cell, h.amb_u, h.amb_v, h.bin0, h.bin1, h.wbin, wu, wv);
+        else { wu = h.amb_u; wv = h.amb_v; }
+        up_s = std::sin(L_.upslope[cell] * kDeg);
+        up_c = std::cos(L_.upslope[cell] * kDeg);
+        double ts = thermal_speed(h.th, L_.slope_tan[cell], up_s, up_c);
+        wu += ts * up_s;
+        wv += ts * up_c;
+        return std::hypot(wu, wv);
+    }
+    double local_wind(int cell, int k, double& wu, double& wv) const {
+        double s, c;
+        return local_wind(cell, hours_[k], wu, wv, s, c);
     }
 
     static double ros_dir(const Ellipse& e, double bearing) {
@@ -200,6 +235,26 @@ inline double layer_factor(const InterventionRaster::Layer& l, bool breached, do
 
 }  // namespace
 
+float patch_noise(uint32_t seed, double x_m, double y_m, double patch_m) {
+    auto lattice = [seed](int i, int j) {
+        uint32_t h = seed * 0x9E3779B1u ^ (uint32_t(i) * 0x85EBCA77u) ^ (uint32_t(j) * 0xC2B2AE3Du);
+        h ^= h >> 16;
+        h *= 0x7FEB352Du;
+        h ^= h >> 15;
+        h *= 0x846CA68Bu;
+        h ^= h >> 16;
+        return (float(h & 0xFFFFFF) / 16777216.f * 2.f - 1.f) * 1.7320508f;  // uniform, unit variance
+    };
+    double fx = x_m / patch_m, fy = y_m / patch_m;
+    int i = int(std::floor(fx)), j = int(std::floor(fy));
+    double wx = fx - i, wy = fy - j;
+    wx = wx * wx * (3 - 2 * wx);
+    wy = wy * wy * (3 - 2 * wy);
+    double v = (1 - wy) * ((1 - wx) * lattice(i, j) + wx * lattice(i + 1, j)) +
+               wy * ((1 - wx) * lattice(i, j + 1) + wx * lattice(i + 1, j + 1));
+    return float(v * 1.55);  // interpolation shrinks the variance; restore ≈ 1
+}
+
 void InterventionRaster::build(const Grid& g, const std::vector<Intervention>& ivs) {
     layers.clear();
     mask.assign(g.size(), 0);
@@ -236,6 +291,19 @@ double SpreadSolver::head_ros(int cell, double t0_epoch, double t_min, const Spr
     if (flame) *flame = RunCtx::flame_m(e, e.rmax);
     if (dir) *dir = e.theta;
     return e.rmax;
+}
+
+void SpreadSolver::wind_at(double t0_epoch, double t_min, const SpreadParams& p, const std::vector<int>& cells,
+                           std::vector<float>& speed_ms, std::vector<float>& to_deg) const {
+    RunCtx ctx(L_, wx_, rf_, p, t0_epoch, t_min + 60);
+    const int k = ctx.hour_of(t_min);
+    speed_ms.resize(cells.size());
+    to_deg.resize(cells.size());
+    for (size_t i = 0; i < cells.size(); ++i) {
+        double wu, wv;
+        speed_ms[i] = float(ctx.local_wind(cells[i], k, wu, wv));
+        to_deg[i] = float(std::fmod(std::atan2(wu, wv) / kDeg + 360.0, 360.0));
+    }
 }
 
 void SpreadSolver::run(const RunConfig& cfg, RunOutput& out) const {
