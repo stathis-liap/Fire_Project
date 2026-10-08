@@ -44,7 +44,7 @@ struct Observation {
 struct IncidentOptions {
     std::string cache_dir = "cache";
     bool offline = false;
-    int members = 24;
+    int members = 64;
 };
 
 class Incident {
@@ -101,6 +101,9 @@ class Incident {
     SpreadParams params_;
     bool calibrated_ = false;
     json calibration_;
+    std::vector<CalibrationInterval> cal_history_;  // observed fire steps already fitted (newest last)
+    Uncertainty cal_spread_;                        // parameter spread the observations still allow
+    double cal_epoch_ = 0;                          // time of the observation behind the calibration
     std::vector<Observation> obs_;
     std::vector<Destination> dests_;
     int next_dest_id_ = 1;
@@ -110,7 +113,7 @@ class Incident {
     std::set<std::string> disabled_;  // recommendation keys switched off by the user
     std::set<std::string> forced_;    // recommendation keys switched on by the user
     Resources resources_;
-    int members_ = 24;
+    int members_ = 64;
     bool wide_ = false;
     EnsembleResult base_, plan_;
     // Danger map: fire potential × how quickly it would reach important places.

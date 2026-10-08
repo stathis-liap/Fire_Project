@@ -17,10 +17,11 @@ using json = nlohmann::json;
 std::string render_zones_png(const Grid& g, const std::vector<float>& p50, const std::vector<float>& p10, float t_now,
                              float t_end);
 
-// Probability heat maps: for each hour h = 1..hours, the share of scenarios
-// in which the fire has reached each cell by t_now + h.  Returns data: URLs.
-std::vector<std::string> render_prob_pngs(const Grid& g, const std::vector<std::vector<float>>& arrivals, float t_now,
-                                          int hours);
+// Probability heat maps: for each time in `times` (minutes since t0,
+// ascending), the share of scenarios in which the fire has reached each cell
+// by then.  Returns data: URLs.
+std::vector<std::string> render_prob_pngs(const Grid& g, const std::vector<std::vector<float>>& arrivals,
+                                          const std::vector<float>& times);
 
 // Danger map: class 0 = cannot burn (transparent), 1 low … 5 extreme.
 std::string render_danger_png(const Grid& g, const std::vector<uint8_t>& danger_class);

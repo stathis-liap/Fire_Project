@@ -376,6 +376,119 @@ int main() {
         CHECK(std::abs(std::remainder(dir[g.idx(100, 150)] - 180.0, 360.0)) < 10, "north wind → spread south");
     }
 
+    // 12. Terrain wind field: speed-up over a ridge crest, shelter in its lee,
+    //     channelling along a valley, slope winds by day and night.
+    {
+        auto land = [](int n, double cell, auto elev_fn) {
+            Landscape L;
+            L.grid = Grid::centred({38.5, 22.0}, n * cell / 2, cell);
+            L.elev.resize(L.grid.size());
+            for (int r = 0; r < L.grid.rows; ++r)
+                for (int c = 0; c < L.grid.cols; ++c) L.elev[L.grid.idx(r, c)] = float(elev_fn(r, c));
+            auto tic = std::chrono::steady_clock::now();
+            derive_terrain(L);
+            double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tic).count();
+            L.fuel.assign(L.grid.size(), uint8_t(fuel_index("Dry_Grass")));
+            L.road.assign(L.grid.size(), 0);
+            return std::make_pair(std::move(L), ms);
+        };
+        // N–S ridge, 400 m high, 1.5 km half-width; 8 m/s west wind (blows east).
+        // 03:00 UTC ≈ 04:30 solar: no daytime slope wind, so terrain alone shows.
+        auto [L, ms] = land(450, 40, [](int r, int c) { double x = (c - 225) * 40.0; return 100 + 400 * std::exp(-x * x / (2 * 750.0 * 750.0)); });
+        const double t_night = 3 * 3600.0;
+        auto wx = const_wx(8, 270);
+        for (auto& h : wx.hourly) h.epoch += t_night;
+        SpreadSolver s(L, wx);
+        const Grid& g = L.grid;
+        std::vector<int> cells = {g.idx(225, 20), g.idx(225, 225), g.idx(225, 250), g.idx(225, 205)};
+        std::vector<float> sp, dir;
+        s.wind_at(t_night, 30, {}, cells, sp, dir);
+        std::printf("wind field %dx%d built in %.0f ms (coarse ×%d, %d CG iterations)\n", g.rows, g.cols, ms,
+                    L.wind.coarse_factor, L.wind.cg_iterations);
+        std::printf("  west wind 8 m/s over a 400 m ridge: upwind %.1f, crest %.1f, lee %.1f, windward slope %.1f m/s\n",
+                    sp[0], sp[1], sp[2], sp[3]);
+        CHECK(std::abs(sp[0] - 8) < 1.2, "far upwind should be close to ambient: %.1f", sp[0]);
+        CHECK(sp[1] > 1.15 * sp[0], "crest speed-up: %.1f vs %.1f", sp[1], sp[0]);
+        CHECK(sp[2] < 0.85 * sp[1], "lee shelter: %.1f vs crest %.1f", sp[2], sp[1]);
+        CHECK(std::abs(std::remainder(dir[1] - 90.0, 360.0)) < 10, "crest flow still eastward: %.0f", dir[1]);
+        CHECK(ms < 2500, "wind field too slow: %.0f ms", ms);
+
+        // E–W valley between two ridges; NW wind → valley floor wind turns along the valley.
+        auto [V, ms2] = land(300, 50, [](int r, int c) { double y = (r - 150) * 50.0; return 100 + 600 * (1 - std::exp(-y * y / (2 * 1500.0 * 1500.0))); });
+        auto wv = const_wx(6, 315);
+        for (auto& h : wv.hourly) h.epoch += t_night;
+        SpreadSolver sv(V, wv);
+        sv.wind_at(t_night, 30, {}, {V.grid.idx(150, 150)}, sp, dir);
+        double turn = std::abs(std::remainder(dir[0] - 135.0, 360.0));
+        std::printf("  NW wind into an E–W valley: floor wind blows towards %.0f° (ambient 135°), %.1f m/s\n", dir[0], sp[0]);
+        CHECK(turn > 8 && std::abs(std::remainder(dir[0] - 90.0, 360.0)) < 45, "valley channelling: %.0f°", dir[0]);
+
+        // Calm day on a south-facing 30 % slope: upslope (north) by day, downslope at night.
+        // Rows grow southwards, so elevation falling with r is a slope rising to the north (facing south).
+        auto [P, ms3] = land(120, 30, [](int r, int c) { return 1000 + 0.3 * 30.0 * (120 - r); });
+        (void)ms2;
+        (void)ms3;
+        auto calm = const_wx(0, 0);
+        const double noon_utc = (12 - 22.0 / 15.0) * 3600.0, night_utc = (3 - 22.0 / 15.0 + 24) * 3600.0;
+        SpreadSolver sp_(P, calm);
+        std::vector<int> mid = {P.grid.idx(60, 60)};
+        std::vector<float> s1, d1, s2, d2;
+        sp_.wind_at(noon_utc, 0, {}, mid, s1, d1);
+        sp_.wind_at(night_utc, 0, {}, mid, s2, d2);
+        std::printf("  calm, sunny south-facing slope: noon %.1f m/s towards %.0f°, night %.1f m/s towards %.0f°\n",
+                    s1[0], d1[0], s2[0], d2[0]);
+        CHECK(s1[0] > 0.8 && std::abs(std::remainder(d1[0] - 0.0, 360.0)) < 20, "anabatic upslope by day");
+        CHECK(s2[0] > 0.5 && std::abs(std::remainder(d2[0] - 180.0, 360.0)) < 20, "katabatic downslope at night");
+    }
+
+    // 13. Patchy ensemble noise: zero mean, about unit variance, smooth.
+    {
+        double s1 = 0, s2 = 0, jump = 0;
+        int n = 0;
+        for (int i = 0; i < 800; ++i)
+            for (int j = 0; j < 800; ++j) {
+                double z = patch_noise(42, i * 100.0, j * 100.0, 1000.0);
+                s1 += z;
+                s2 += z * z;
+                jump += std::abs(z - patch_noise(42, i * 100.0 + 50.0, j * 100.0, 1000.0));
+                ++n;
+            }
+        double mean = s1 / n, sd = std::sqrt(s2 / n - mean * mean);
+        std::printf("patch noise: mean %+.3f, sd %.2f, mean step over 50 m %.3f\n", mean, sd, jump / n);
+        CHECK(std::abs(mean) < 0.12 && sd > 0.7 && sd < 1.3, "patch noise statistics");
+        CHECK(jump / n < 0.2, "patch noise should be smooth at 50 m");
+    }
+
+    // 14. Local correction: in calm air the real fire runs faster to the east
+    //     (the fuel map is wrong there).  No global parameter can make a
+    //     calm fire lopsided, so calibration must learn a >1 correction east.
+    {
+        auto M = flat_land(241, 10, "Phrygana_Low_Scrub");
+        Landscape T = M;
+        for (int r = 0; r < T.grid.rows; ++r)
+            for (int c = 123; c < T.grid.cols; ++c) T.fuel[T.grid.idx(r, c)] = uint8_t(fuel_index("Dry_Grass"));
+        auto wx = const_wx(0, 0);
+        SpreadSolver st(T, wx), sm(M, wx);
+        RunConfig tc;
+        tc.t_end = 185;
+        tc.sources = {{M.grid.idx(120, 120), 0.f}};
+        RunOutput truth;
+        st.run(tc, truth);
+        CalibrationInput ci;
+        ci.sources = tc.sources;
+        ci.t_obs = 180;
+        ci.observed.assign(M.grid.size(), 0);
+        for (size_t i = 0; i < truth.arrival.size(); ++i) ci.observed[i] = truth.arrival[i] <= 180;
+        CalibrationResult cr = calibrate(sm, 0, ci);
+        const auto* f = cr.params.local_ros.get();
+        float east = f ? (*f)[M.grid.idx(120, 140)] : 1.f, west = f ? (*f)[M.grid.idx(120, 100)] : 1.f;
+        std::printf("local correction: agreement %.2f → %.2f, east ×%.2f, west ×%.2f (range %.2f–%.2f)\n", cr.score_before,
+                    cr.score_after, east, west, cr.local_min, cr.local_max);
+        CHECK(f != nullptr, "a local correction should be learned");
+        CHECK(east > 1.15 * west, "faster to the east: east %.2f west %.2f", east, west);
+        CHECK(cr.spread.ros_sigma > 0 && cr.spread.wind_dir_sigma > 0, "posterior spread reported");
+    }
+
     std::printf(g_fail ? "\n%d FAILED\n" : "\nall tests passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

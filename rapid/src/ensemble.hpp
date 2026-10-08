@@ -15,6 +15,8 @@ struct Uncertainty {
     double wind_dir_sigma = 15.0;    // degrees
     double moisture_sigma = 0.012;   // absolute fraction
     double ros_sigma = 0.25;         // log-normal σ of spread-rate multiplier
+    double patch_sigma = 0.0;        // log σ of patchy, place-to-place spread-rate errors
+    double patch_m = 1000;           // size of those patches (m)
 };
 
 struct Member {

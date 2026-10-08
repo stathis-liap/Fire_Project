@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "geo.hpp"
+#include "windfield.hpp"
 
 namespace rapid {
 
@@ -33,7 +34,7 @@ struct Landscape {
     std::vector<float> elev;        // m
     std::vector<float> slope_tan;   // rise/run
     std::vector<float> upslope;     // compass bearing pointing uphill (deg)
-    std::vector<float> wind_mult;   // terrain exposure multiplier on wind speed
+    WindField wind;                 // terrain-steered wind response (see windfield.hpp)
     std::vector<int8_t> moist_adj;  // aspect moisture class: 0 normal, 1 sunny (drier), 2 shaded (moister)
     std::vector<uint8_t> fuel;      // index into fuel_table()
     std::vector<uint8_t> road;      // 1 = a vehicle-accessible road crosses the cell
@@ -54,10 +55,10 @@ struct BuildOptions {
 };
 
 // Fetches (or loads from cache) DEM, land cover and map features, and
-// derives slope, aspect, terrain wind exposure and accessibility.
+// derives slope, aspect, the terrain wind field and accessibility.
 Landscape build_landscape(const BuildOptions& opt);
 
-// Recomputes slope/aspect/exposure from elev (used by build and tests).
+// Recomputes slope/aspect/wind field from elev (used by build and tests).
 void derive_terrain(Landscape& L);
 
 }  // namespace rapid

@@ -216,6 +216,11 @@ h3 { font-size: 14px; margin: 16px 0 8px; color: var(--muted); font-weight: 600;
 .prob-legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 4px; }
 .prob-legend i { flex: 1; height: 10px; border-radius: 5px;
   background: linear-gradient(90deg, rgba(255,236,120,.6), #ffba3c, #f87620, #de2c1e, #82001c); }
+.hours-custom { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--muted); flex-wrap: wrap; }
+.dlg .hours-custom input[type=number] { width: 96px; margin-top: 0; }
+.horizon-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-weight: 700; flex-wrap: wrap; }
+.horizon-row input { width: 76px; height: var(--tap); border-radius: 10px; border: 1px solid var(--line); background: #262a31;
+  color: var(--text); padding: 0 10px; font-size: 17px; font-weight: 700; }
 .scen-row { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
 .small-chips button { min-height: 36px; padding: 0 12px; font-size: 14px; }
 .check { display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 14px; }

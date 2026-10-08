@@ -9,7 +9,8 @@ const state = {
   version: -1,
   view: 'base',      // 'base' | 'plan'
   mode: 'zones',     // 'zones' (most likely) | 'prob' (chance-of-fire heat map) | 'danger'
-  probHour: 3,
+  probHour: 2,       // index (1-based) into result.frames for the heat map
+  showWind: false,
   planNo: {},        // recommendation id → number shown in the plan
   pending: null,     // {lat, lon} pin before the fire is started
   tool: null,        // active drawing tool
@@ -137,12 +138,13 @@ map.on('load', async () => {
     evac: ['<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#9333ea" stroke="#fff" stroke-width="3"/><path d="M22 10v15M22 30v3" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>', 44],
     fire: ['<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 32 32"><path d="M16 2c2 6 9 9 9 17a9 9 0 0 1-18 0c0-5 3-7 4-11 1 3 3 4 3 4s-1-6 2-10z" fill="#ff5a1a" stroke="#fff" stroke-width="2"/></svg>', 40],
     dozer: ['<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#d97706" stroke="#fff" stroke-width="3"/><path d="M9 26h20v5H9zM12 19h10v7H12zM29 17l6 4v10h-6" fill="#fff"/></svg>', 44],
+    wind: ['<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M14 2 L21 14 L16 13 L16 26 L12 26 L12 13 L7 14 Z" fill="#9ecbff" stroke="#0b1a2e" stroke-width="1.5" stroke-linejoin="round"/></svg>', 28],
     house: ['<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30"><path d="M3 14 15 4l12 10v13H3z" fill="#fff" stroke="#111" stroke-width="2"/></svg>', 30],
   };
   for (const [name, [svg, size]] of Object.entries(icons)) map.addImage(name, await svgImg(svg, size), { pixelRatio: 2 });
 
   const src = (id) => map.addSource(id, { type: 'geojson', data: EMPTY });
-  ['iso', 'arrows', 'observed', 'recs', 'manual', 'recs-pts', 'manual-pts', 'places', 'draft', 'pin'].forEach(src);
+  ['iso', 'arrows', 'observed', 'recs', 'manual', 'recs-pts', 'manual-pts', 'places', 'draft', 'pin', 'wind'].forEach(src);
   map.addSource('zones', { type: 'image', url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
     coordinates: [[0, 1], [1, 1], [1, 0], [0, 0]] });
 
@@ -161,6 +163,11 @@ map.on('load', async () => {
   map.addLayer({ id: 'arrows-head', type: 'symbol', source: 'arrows', filter: ['==', '$type', 'Point'], layout: {
     'icon-image': ['case', ['==', ['get', 'kind'], 'head'], 'arrow-head', 'arrow-front'], 'icon-rotate': ['get', 'bearing'],
     'icon-rotation-alignment': 'map', 'icon-allow-overlap': true } });
+  map.addLayer({ id: 'wind', type: 'symbol', source: 'wind', layout: {
+    'icon-image': 'wind', 'icon-rotate': ['get', 'to'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true,
+    'icon-size': ['interpolate', ['linear'], ['get', 'kmh'], 0, 0.55, 15, 0.85, 40, 1.4],
+    'text-field': ['to-string', ['get', 'kmh']], 'text-font': ['Open Sans Bold'], 'text-size': 10, 'text-offset': [0, 1.3],
+    'text-allow-overlap': false }, paint: { 'icon-opacity': 0.85, 'text-color': '#cfe5ff', 'text-halo-color': '#000', 'text-halo-width': 1.5 } });
   map.addLayer({ id: 'observed-pts', type: 'circle', source: 'observed', filter: ['==', '$type', 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#ff7a00', 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
 
   // Recommendations & own actions
@@ -260,7 +267,27 @@ $('#start-ago').onclick = (e) => {
 $('#start-hours').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return;
   $$('#start-hours button').forEach((x) => x.classList.toggle('on', x === b));
+  $('#start-hours-custom').value = '';
   state.startHours = +b.dataset.h;
+};
+const clampHours = (v) => Math.min(48, Math.max(0.5, Math.round(v * 2) / 2));
+$('#start-hours-custom').oninput = (e) => {
+  const v = parseFloat(e.target.value);
+  if (!(v > 0)) return;
+  $$('#start-hours button').forEach((x) => x.classList.remove('on'));
+  state.startHours = clampHours(v);
+};
+$('#horizon-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const v = parseFloat($('#horizon-input').value);
+  if (!(v > 0)) return toast('Enter the forecast length in hours (0.5–48).', true);
+  const h = clampHours(v);
+  const r = await busy(`Forecasting the next ${h} h…`, () => api('/api/refresh', { horizon_h: h }));
+  if (r) render(r);
+};
+$('#show-wind').onchange = (e) => {
+  state.showWind = e.target.checked;
+  if (mapReady && state.result) updateMap(state.result, false);
 };
 $('#start-cancel').onclick = () => {
   $('#dlg-start').classList.add('hidden');
@@ -326,7 +353,7 @@ $('#btn-new').onclick = async () => {
 };
 
 function clearMap() {
-  ['iso', 'arrows', 'observed', 'recs', 'manual', 'recs-pts', 'manual-pts', 'places', 'draft', 'pin'].forEach((s) => map.getSource(s)?.setData(EMPTY));
+  ['iso', 'arrows', 'observed', 'recs', 'manual', 'recs-pts', 'manual-pts', 'places', 'draft', 'pin', 'wind'].forEach((s) => map.getSource(s)?.setData(EMPTY));
   map.setLayoutProperty('zones', 'visibility', 'none');
 }
 
@@ -492,6 +519,7 @@ function updateMap(r, fit) {
   const prob = state.mode === 'prob', danger = state.mode === 'danger';
   const h = Math.min(state.probHour, L.probability.length);
   const url = prob ? L.probability[h - 1] : danger ? r.danger.overlay : L.overlay.url;
+  map.getSource('wind').setData(state.showWind ? windFeatures(r, prob ? h : 0) : EMPTY);
   map.getSource('zones').updateImage({ url, coordinates: L.overlay.coordinates });
   for (const id of ['iso', 'iso-halo', 'iso-label']) map.setLayoutProperty(id, 'visibility', prob || danger ? 'none' : 'visible');
   map.getSource('iso').setData(L.isochrones);
@@ -564,6 +592,8 @@ function renderView(r) {
   $('#danger-ctl').classList.toggle('hidden', state.mode !== 'danger');
   if (state.mode === 'danger') renderDanger(r);
   const H = r.base.probability.length;
+  if (document.activeElement !== $('#horizon-input')) $('#horizon-input').value = r.incident.horizon_h;
+  $('#show-wind').checked = state.showWind;
   const sl = $('#prob-hour');
   sl.max = H;
   state.probHour = Math.min(Math.max(1, state.probHour), H);
@@ -580,11 +610,27 @@ function renderView(r) {
   $('#plan-gain').textContent = txt;
 }
 
+function fmtLead(min) {
+  const m = Math.round(min);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `${h} h ${r}` : `${h} h`;
+}
+
 function probHourText() {
   const r = state.result;
   if (!r) return;
-  const e = r.incident.now_epoch + state.probHour * 3600;
-  $('#prob-hour-text').textContent = `+${state.probHour} h · ${clock(e)}`;
+  const e = (r.frames || [])[state.probHour - 1] ?? r.incident.now_epoch + state.probHour * 3600;
+  $('#prob-hour-text').textContent = `+${fmtLead((e - r.incident.now_epoch) / 60)} · ${clock(e)}`;
+}
+
+// Wind arrows for one frame of result.wind_field (0 = now, i = frames[i-1]).
+function windFeatures(r, frame) {
+  const w = r.wind_field;
+  if (!w || !w.frames.length) return EMPTY;
+  const f = w.frames[Math.min(frame, w.frames.length - 1)];
+  return { type: 'FeatureCollection', features: w.points.map((p, i) => ({
+    type: 'Feature', geometry: { type: 'Point', coordinates: p }, properties: { to: f.to[i], kmh: f.kmh[i] } })) };
 }
 
 const DANGER_NAMES = ['None', 'Low', 'Moderate', 'High', 'Very high', 'Extreme'];
@@ -783,6 +829,7 @@ function renderQuality(r) {
   const warn = (r.warnings || []).map((w) => `<div style="color:var(--amber)">⚠ ${esc(w)}</div>`).join('');
   $('#sources').innerHTML = `${warn}Terrain: ${esc(s.terrain)}<br>Vegetation: ${esc(s.fuel)}<br>Weather: ${esc(s.weather)}<br>
     Places: ${esc(s.places)}${s.local.length ? `<br>Field data: ${s.local.length} report(s)` : ''}<br>
+    ${r.wind_field ? `Wind on the ground: ${esc(r.wind_field.solver)}<br>` : ''}
     Forecast computed in ${t.recompute} ms (${t.members} scenarios, ${r.grid.cell_m} m cells).
     <div class="mobile-only" style="margin-top:12px"><button class="btn ghost" onclick="document.querySelector('#btn-new').click()">Start a new fire</button></div>`;
 }

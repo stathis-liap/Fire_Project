@@ -1,5 +1,6 @@
 #include "render.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <map>
@@ -69,39 +70,41 @@ std::string encode_png(const std::vector<uint8_t>& px, int w, int h) {
 }
 }  // namespace
 
-std::vector<std::string> render_prob_pngs(const Grid& g, const std::vector<std::vector<float>>& arrivals, float t_now,
-                                          int hours) {
+std::vector<std::string> render_prob_pngs(const Grid& g, const std::vector<std::vector<float>>& arrivals,
+                                          const std::vector<float>& times) {
     const size_t N = g.size(), M = arrivals.size();
-    std::vector<std::vector<uint8_t>> px(hours, std::vector<uint8_t>(N * 4, 0));
-    if (!M) return std::vector<std::string>(hours);
+    const int F = int(times.size());
+    std::vector<std::vector<uint8_t>> px(F, std::vector<uint8_t>(N * 4, 0));
+    if (!M) return std::vector<std::string>(F);
     // Colour ramp: pale yellow (unlikely) → orange → red → dark red (certain).
     static const float stops[5][3] = {{255, 236, 120}, {255, 186, 60}, {248, 118, 32}, {222, 44, 30}, {130, 0, 28}};
-    std::vector<int> hist(hours + 1);
+    std::vector<int> hist(F + 1);
     for (size_t c = 0; c < N; ++c) {
         std::fill(hist.begin(), hist.end(), 0);
         bool any = false;
         for (size_t m = 0; m < M; ++m) {
             float a = arrivals[m][c];
             if (a >= kInf) continue;
-            int b = std::max(0, int(std::ceil((a - t_now) / 60.f)));
-            if (b <= hours) { ++hist[b]; any = true; }
+            // First frame by which this member has reached the cell.
+            int b = int(std::lower_bound(times.begin(), times.end(), a) - times.begin());
+            if (b < F) { ++hist[b]; any = true; }
         }
         if (!any) continue;
-        int cum = hist[0];
-        for (int h = 1; h <= hours; ++h) {
+        int cum = 0;
+        for (int h = 0; h < F; ++h) {
             cum += hist[h];
             double p = double(cum) / M;
             if (p < 0.03) continue;
             double x = p * 4.0;
             int i = std::min(3, int(x));
             double f = x - i;
-            uint8_t* q = &px[h - 1][4 * c];
+            uint8_t* q = &px[h][4 * c];
             for (int k = 0; k < 3; ++k) q[k] = uint8_t(stops[i][k] + f * (stops[i + 1][k] - stops[i][k]));
             q[3] = uint8_t(60 + 165 * p);
         }
     }
     std::vector<std::string> out;
-    for (int h = 0; h < hours; ++h) out.push_back(encode_png(px[h], g.cols, g.rows));
+    for (int h = 0; h < F; ++h) out.push_back(encode_png(px[h], g.cols, g.rows));
     return out;
 }
 

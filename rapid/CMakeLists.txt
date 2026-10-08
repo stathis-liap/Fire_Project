@@ -14,6 +14,7 @@ add_library(rapid_core STATIC
   src/fuels.cpp
   src/fetch.cpp
   src/landscape.cpp
+  src/windfield.cpp
   src/spread.cpp
   src/ensemble.cpp
   src/calibrate.cpp
