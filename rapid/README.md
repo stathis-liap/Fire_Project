@@ -105,41 +105,45 @@ Headless / scripted use prints a plain-text briefing:
 ./build/wilson_rapid --forecast 38.56,21.94 --ago 60 --hours 6
 ```
 
-## Using it (no training needed)
+## Using it
 
-1. **Tap the map where the fire is**, or type coordinates (`38.56, 21.94`, `38°33'36"N 21°56'24"E`)
-   or a place name.
-2. Say **when it started** (just now / 30 min / 1 h / …) and **how far ahead** to forecast (1, 2, 3,
-   6, 12, 24 h, or type any length from 0.5 to 48 h), then press **Start forecast**. The length can
-   be changed later at the top of **Map shows** (*Forecast for the next … h*).
-3. Read the panel from top to bottom:
-   * **Fire is moving**: the direction, head speed, flame height and what kind of attack is
-     safe (hauling-chart limits).
-   * **Places at risk**: time to impact for each place, how likely it is, and the confidence.
-   * **Your resources**: use − / + to set how many aircraft, fire trucks and bulldozers you
-     have. The plan is rebuilt about a second later. *Ask for: …* lines show what one more
-     unit would achieve, and *keep in reserve* lines show units the plan doesn't need.
-   * **Map shows**: choose **Most likely** (hourly zones and fire-front lines), **Chance of
-     fire** (heat map) or **Danger** (how dangerous each spot is, with the 1-hour danger zones
-     around villages), and **No action** vs. **With the plan**. Tapping the map gives each spot's
-     danger level, spread speed, flame height and how long fire from there would take to
-     reach the nearest important place. In heat-map mode, the slider
-     picks the time. You can also run 64, 100 or 200 scenarios, and tick *not sure about wind /
-     fuel* to widen the range early on, before anything has been calibrated.
-     *Show wind on the ground* draws the terrain-adjusted wind (now, or at the slider time in
-     heat-map mode).
-   * **Recommended plan**: numbered actions, each with *act before HH:MM*, coordinates, its
-     effect within the plan and how often it works across scenarios. Switch an action off to
-     drop it, or open **Other options** and switch one on to force it in. The rest of the plan
-     is re-optimised around your choice.
-4. **Tap anywhere** on the map to see when the fire could get there. Use **Protect this place**
-   to add it to the list.
-5. When you know more, use the bottom toolbar:
-   * **Burned area**: tap around what has burned. The model re-fits to it (calibration) and
+1. **Click the map at the ignition point**, or enter coordinates (`38.56, 21.94`,
+   `38°33'36"N 21°56'24"E`) or a place name in the search box.
+2. In **New incident**, set the **time since ignition** and the **forecast window** (1, 2, 3, 6, 12,
+   24 h, or any length from 0.5 to 48 h), then press **Run forecast**.
+3. The screen is split by purpose:
+   * **Top bar**: the incident, the forecast window (change it and press **Apply**), **Update
+     forecast** (re-run for the current time with fresh weather), **New incident**, and the
+     overall confidence grade.
+   * **Top right: reference panels**: **Weather** (now and hourly) and **Forecast quality**
+     (confidence reasons, calibration result, data sources). They start closed. Open each with
+     its tab; **Close** hides it again.
+   * **Left column, Fire forecast**: fire behaviour (direction, head spread rate, flame length,
+     area, attack advice, danger class), the **map layer** (most likely arrival zones, probability
+     with a time slider and scenario count, danger map, surface wind field) and **places at risk**
+     (arrival time, probability, confidence). **Hide** collapses it to a tab on the left edge;
+     **Widen** makes it wider.
+   * **Bottom dock, Operations**: resources, field reports, your own actions and the action plan.
+     **Minimize** reduces it to one line. A minimized dock opens while the cursor is over it.
+4. **Resources available** start at 0. Enter the aircraft, engines and dozers you can commit. The
+   planner then marks the best actions for exactly those resources as **Recommended**. *Request:*
+   notes show what one more unit would achieve; reserve notes show units the plan does not need.
+5. **No action is applied until you switch it on.** Switch a recommended action (or one of the
+   **Other options**) on to apply it; switch it off to take it out again. The rest of the
+   recommendations are re-optimised around what you applied. Use **Without plan / With plan** in
+   the dock header to compare the forecast before and after the applied actions.
+6. **Click anywhere** on the map to see when the fire could get there, its probability and
+   danger class. **Add as protected asset** adds it to the places at risk.
+7. When you know more, use **Field reports** in the dock:
+   * **Burned area**: click around what has burned. The model re-fits to it (calibration) and
      forecasts from there.
-   * **Local wind**: the wind measured on site overrides the forecast.
-   * **Firebreak / Water drop / Truck**: test your own plan.
-   * **Update**: re-run for the current time with fresh weather.
+   * **Measured wind**: wind measured on site overrides the forecast.
+   * **Protect asset**: mark a place and get its time to impact.
+   * **Own actions** (firebreak, air drop, engine) are always applied.
+
+Map symbols: lettered squares mark actions (**E** engine, **A** air drop, **D** dozer, **X**
+evacuation). Applied actions are numbered; recommended ones are faint and marked **R**. The red
+diamond is the ignition point.
 
 Map colours: dark = burned · red = within 1 h · orange = 1–2 h · amber = 2–3 h ·
 yellow = later · faint yellow = *possible* (only the pessimistic scenarios reach it).
@@ -332,9 +336,9 @@ dispatch) can feed it.
 | `POST /api/local/hotspots` | `{points: [[lon,lat],…], time?, source?}` | active fire points (drone / thermal) |
 | `POST /api/local/fuel` | `{polygon, fuel: "Dry_Grass" \| "burned" \| …}` | correct the vegetation map |
 | `POST /api/destination` | `{lat, lon, name}` or `{remove: id}` | add or remove a place to protect |
-| `POST /api/resources` | `{aircraft, trucks, dozers}` | resources the commander can give → re-plan |
+| `POST /api/resources` | `{aircraft, trucks, dozers}` | resources the commander can give (0 by default) → new recommendations |
 | `POST /api/settings` | `{members: 8–200, wide: bool}` | scenarios for confidence and the heat map (default 64) |
-| `POST /api/plan` | `{toggle:{key,enabled}}`, `{add:{type, points}}`, `{remove:id}`, `{reset_choices:true}` | force options in or out, add your own actions |
+| `POST /api/plan` | `{toggle:{key,enabled}}`, `{dismiss:key}`, `{add:{type, points}}`, `{remove:id}`, `{reset_choices:true}` | apply or un-apply an action, never recommend it again, add your own actions |
 | `POST /api/refresh` | `{horizon_h?, refetch_weather?}` | re-run for the current time, optionally with a new forecast length |
 | `POST /api/reset` | | clear the incident |
 

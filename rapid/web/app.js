@@ -23,20 +23,21 @@ const state = {
 
 // ── Formatting ───────────────────────────────────────────────────────────
 const clock = (epoch) => new Date(epoch * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-const tokens = (s) => (s || '').replace(/\{t:(\d+)\}/g, (_, e) => clock(+e));
+// Engine text is translated first, then its {t:epoch} tokens become local clock times.
+const tokens = (s) => I18N.tr(s || '').replace(/\{t:(\d+)\}/g, (_, e) => clock(+e));
 function inMinutes(epoch) {
   const m = Math.round((epoch * 1000 - Date.now()) / 60000);
-  if (m <= 0) return 'now';
-  if (m < 60) return `${Math.max(5, Math.round(m / 5) * 5)} min`;
+  if (m <= 0) return t('now');
+  if (m < 60) return I18N.tr(`${Math.max(5, Math.round(m / 5) * 5)} min`);
   const h = Math.floor(m / 60), r = Math.round((m % 60) / 5) * 5;
-  return `${h} h${r ? ' ' + r + ' min' : ''}`;
+  return I18N.tr(`${h} h${r ? ' ' + r + ' min' : ''}`);
 }
 function inDur(m) {
   m = Math.round(m / 5) * 5;
-  return m < 60 ? `${Math.max(5, m)} min` : `${Math.floor(m / 60)} h${m % 60 ? ' ' + (m % 60) + ' min' : ''}`;
+  return I18N.tr(m < 60 ? `${Math.max(5, m)} min` : `${Math.floor(m / 60)} h${m % 60 ? ' ' + (m % 60) + ' min' : ''}`);
 }
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const gradeText = { high: 'High', medium: 'Medium', low: 'Low' };
+const gradeText = new Proxy({ high: 'High', medium: 'Medium', low: 'Low' }, { get: (o, k) => t(o[k]) });
 
 function toast(msg, err = false) {
   const t = $('#toast');
@@ -56,24 +57,24 @@ if (location.search.includes('debug')) {
     console[k] = (...a) => { box.textContent += a.map(String).join(' ') + '\n'; orig(...a); };
   }
 }
-window.addEventListener('error', (e) => toast(`Display error: ${e.message} (line ${e.lineno})`, true));
-window.addEventListener('unhandledrejection', (e) => toast(`Display error: ${e.reason?.message || e.reason}`, true));
+window.addEventListener('error', (e) => toast(t('Display error: {m}', { m: `${e.message} (line ${e.lineno})` }), true));
+window.addEventListener('unhandledrejection', (e) => toast(t('Display error: {m}', { m: e.reason?.message || e.reason }), true));
 
 // ── API ──────────────────────────────────────────────────────────────────
 async function api(path, body) {
   const opt = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
   const res = await fetch(path, opt);
-  const j = await res.json().catch(() => ({ error: 'Server did not answer.' }));
-  if (j.error) throw new Error(j.error);
+  const j = await res.json().catch(() => ({ error: t('Server did not answer.') }));
+  if (j.error) throw new Error(I18N.tr(j.error));
   return j;
 }
 
 async function busy(text, fn) {
   state.busy = true;
-  $('#busy-text').textContent = text;
+  $('#busy-text').textContent = t(text);
   $('#busy').classList.remove('hidden');
   const poll = setInterval(async () => {
-    try { const s = await api('/api/status'); if (s.status && s.status !== 'ready' && s.status !== 'idle') $('#busy-text').textContent = s.status; } catch (_) {}
+    try { const s = await api('/api/status'); if (s.status && s.status !== 'ready' && s.status !== 'idle') $('#busy-text').textContent = I18N.tr(s.status); } catch (_) {}
   }, 700);
   try { return await fn(); }
   catch (e) { toast(e.message, true); }
@@ -118,9 +119,9 @@ if (location.search.includes('debug')) {
   setTimeout(() => console.warn('map status: loaded', map.loaded(), 'style', map.isStyleLoaded(), 'ready', mapReady,
     'gl', map.painter?.context?.gl?.constructor?.name, 'size', map.getCanvas().width, map.getCanvas().height), 12000);
 }
-map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
-map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
-map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true } }), 'top-right');
+map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'bottom-right');
+map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true } }), 'bottom-right');
+map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
 
 const EMPTY = { type: 'FeatureCollection', features: [] };
 const svgImg = (svg, size) => new Promise((res) => {
@@ -130,16 +131,18 @@ const svgImg = (svg, size) => new Promise((res) => {
 });
 
 map.on('load', async () => {
+  // Plain operational symbology: lettered markers, no pictograms.
+  const marker = (fill, letter) => [`<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36"><rect x="3" y="3" width="30" height="30" fill="${fill}" stroke="#fff" stroke-width="2.5"/><text x="18" y="24.5" font-family="Arial, sans-serif" font-weight="700" font-size="17" fill="#fff" text-anchor="middle">${letter}</text></svg>`, 36];
   const icons = {
-    'arrow-head': ['<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><path d="M24 3 L42 40 L24 31 L6 40 Z" fill="#ff2a1a" stroke="#fff" stroke-width="3" stroke-linejoin="round"/></svg>', 48],
-    'arrow-front': ['<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M16 3 L28 27 L16 21 L4 27 Z" fill="#ff8a1a" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/></svg>', 32],
-    truck: ['<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#dc2626" stroke="#fff" stroke-width="3"/><path d="M10 15h14v12H10zM24 19h6l4 4v4H24z" fill="#fff"/><circle cx="15" cy="29" r="3" fill="#fff"/><circle cx="29" cy="29" r="3" fill="#fff"/></svg>', 44],
-    drop: ['<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#2563eb" stroke="#fff" stroke-width="3"/><path d="M22 9c4 6 8 10 8 15a8 8 0 0 1-16 0c0-5 4-9 8-15z" fill="#fff"/></svg>', 44],
-    evac: ['<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#9333ea" stroke="#fff" stroke-width="3"/><path d="M22 10v15M22 30v3" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>', 44],
-    fire: ['<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 32 32"><path d="M16 2c2 6 9 9 9 17a9 9 0 0 1-18 0c0-5 3-7 4-11 1 3 3 4 3 4s-1-6 2-10z" fill="#ff5a1a" stroke="#fff" stroke-width="2"/></svg>', 40],
-    dozer: ['<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#d97706" stroke="#fff" stroke-width="3"/><path d="M9 26h20v5H9zM12 19h10v7H12zM29 17l6 4v10h-6" fill="#fff"/></svg>', 44],
-    wind: ['<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M14 2 L21 14 L16 13 L16 26 L12 26 L12 13 L7 14 Z" fill="#9ecbff" stroke="#0b1a2e" stroke-width="1.5" stroke-linejoin="round"/></svg>', 28],
-    house: ['<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30"><path d="M3 14 15 4l12 10v13H3z" fill="#fff" stroke="#111" stroke-width="2"/></svg>', 30],
+    'arrow-head': ['<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40"><path d="M20 3 L35 35 L20 27 L5 35 Z" fill="#d63a1e" stroke="#fff" stroke-width="2.5" stroke-linejoin="miter"/></svg>', 40],
+    'arrow-front': ['<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M14 3 L24 24 L14 19 L4 24 Z" fill="#e07b28" stroke="#fff" stroke-width="2" stroke-linejoin="miter"/></svg>', 28],
+    truck: marker('#b3302c', 'E'),
+    drop: marker('#2f6aa8', 'A'),
+    evac: marker('#6f3d9e', 'X'),
+    dozer: marker('#a8700f', 'D'),
+    fire: ['<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30"><path d="M15 2 L28 15 L15 28 L2 15 Z" fill="#d63a1e" stroke="#fff" stroke-width="2.5"/><circle cx="15" cy="15" r="3" fill="#fff"/></svg>', 30],
+    wind: ['<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M12 2 L18 12 L13.5 11 L13.5 22 L10.5 22 L10.5 11 L6 12 Z" fill="#b9d3ee" stroke="#0b1a2e" stroke-width="1.2"/></svg>', 24],
+    house: ['<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><rect x="4" y="4" width="14" height="14" fill="#fff" stroke="#111" stroke-width="2"/></svg>', 22],
   };
   for (const [name, [svg, size]] of Object.entries(icons)) map.addImage(name, await svgImg(svg, size), { pixelRatio: 2 });
 
@@ -181,7 +184,7 @@ map.on('load', async () => {
     map.addLayer({ id: `${id}-icon`, type: 'symbol', source: `${id}-pts`, layout: {
       'icon-image': ['match', ['get', 'type'], 'truck', 'truck', 'air_drop', 'drop', 'evacuate', 'evac', 'firebreak', 'dozer', 'truck'],
       'icon-allow-overlap': true, 'text-allow-overlap': true, 'text-field': ['get', 'label'], 'text-font': ['Open Sans Bold'],
-      'text-size': 14, 'text-offset': [0, 1.5], 'text-anchor': 'top' },
+      'text-size': 13, 'text-offset': [0, 1.4], 'text-anchor': 'top' },
       paint: { 'icon-opacity': ['case', ['get', 'enabled'], 1, 0.4], 'text-color': '#fff', 'text-halo-color': '#000', 'text-halo-width': 2.5 } });
   }
   map.addLayer({ id: 'places', type: 'symbol', source: 'places', layout: {
@@ -190,7 +193,7 @@ map.on('load', async () => {
     paint: { 'text-color': ['get', 'color'], 'text-halo-color': '#000', 'text-halo-width': 2 } });
   map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', paint: { 'line-color': '#fff', 'line-width': 3, 'line-dasharray': [2, 1] } });
   map.addLayer({ id: 'draft-pts', type: 'circle', source: 'draft', filter: ['==', '$type', 'Point'], paint: { 'circle-radius': 7, 'circle-color': '#ff6a1a', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
-  map.addLayer({ id: 'pin', type: 'symbol', source: 'pin', layout: { 'icon-image': 'fire', 'icon-allow-overlap': true, 'icon-anchor': 'bottom' } });
+  map.addLayer({ id: 'pin', type: 'symbol', source: 'pin', layout: { 'icon-image': 'fire', 'icon-allow-overlap': true } });
 
   for (const l of ['recs-line', 'recs-icon']) {
     map.on('mouseenter', l, () => (map.getCanvas().style.cursor = 'pointer'));
@@ -204,7 +207,8 @@ map.on('load', async () => {
   }
 });
 // Results are shown even if the map cannot start (no WebGL, tiles offline).
-api('/api/result').then((cur) => { if (cur && cur.status === 'ready' && !state.result) render(cur, true); }).catch(() => {});
+api('/api/result').then((cur) => { if (cur && cur.status === 'ready' && !state.result) render(cur, true); })
+  .catch((e) => console.warn('initial load:', e.stack || e));
 
 // ── Map clicks ───────────────────────────────────────────────────────────
 map.on('click', async (e) => {
@@ -223,20 +227,21 @@ async function showPoint(lngLat) {
   try { p = await api(`/api/point?lat=${lngLat.lat}&lon=${lngLat.lng}&plan=${state.view === 'plan' ? 1 : 0}`); }
   catch (e) { return toast(e.message, true); }
   let html;
-  if (!p.inside) html = '<b>Outside the forecast area.</b>';
+  if (!p.inside) html = `<b>${t('Outside the forecast area.')}</b>`;
   else {
     let eta;
-    if (p.burning_now) eta = '<div class="pop-eta">Already burning</div>';
-    else if (p.eta_epoch) eta = `<div class="pop-eta">Fire ~${clock(p.eta_epoch)}</div><div>in ${inMinutes(p.eta_epoch)} · earliest ${p.earliest_epoch ? clock(p.earliest_epoch) : '—'}</div>`;
-    else eta = `<div class="pop-eta">${p.prob > 0 ? 'Unlikely' : 'Not reached'}</div><div class="muted">within the forecast period</div>`;
+    if (p.burning_now) eta = `<div class="pop-eta">${t('Burning')}</div>`;
+    else if (p.eta_epoch) eta = `<div class="pop-eta">${t('Expected arrival {t}', { t: clock(p.eta_epoch) })}</div><div>${t('In {d}. Earliest {t}', { d: inMinutes(p.eta_epoch), t: p.earliest_epoch ? clock(p.earliest_epoch) : 'n/a' })}</div>`;
+    else eta = `<div class="pop-eta">${t(p.prob > 0 ? 'Unlikely' : 'Not reached')}</div><div class="muted">${t('within the forecast window')}</div>`;
     const dg = p.danger;
-    const dhtml = dg && dg.level ? `<div class="pop-danger"><b class="dtx-${dg.level}">${DANGER_NAMES[dg.level]} danger</b> —
-      fire here could spread ${dg.spread_kmh} km/h towards the ${esc(dg.toward)}${dg.flame_m ? `, flames ~${dg.flame_m} m` : ''}.
-      ${dg.reaches ? (dg.reaches_min < 5 ? `Inside / at the edge of <b>${esc(dg.reaches)}</b>.` :
-        `Would reach <b>${esc(dg.reaches)}</b> in ~${inDur(dg.reaches_min)}.`) : 'No village within 6 h of fire travel.'}</div>` : '';
-    html = `${eta}<div>${p.prob}% chance of fire here</div>${dhtml}
-      <div class="muted small">${esc(p.fuel)} · slope ${p.slope_pct}% · ${p.elevation_m} m${p.flame_m ? ` · flames ~${p.flame_m} m` : ''}</div>
-      <button class="btn primary" id="pop-protect">Protect this place</button>`;
+    const dhtml = dg && dg.level ? `<div class="pop-danger"><b class="dtx-${dg.level}">${t('Danger: {c}', { c: I18N.danger(dg.level) })}</b>.
+      ${t('Potential spread {v} km/h towards the {dir}', { v: dg.spread_kmh, dir: esc(I18N.dir(dg.toward)) })}${dg.flame_m ? t(', flames ~{f} m', { f: dg.flame_m }) : ''}.
+      ${dg.reaches ? (dg.reaches_min < 5 ? t('Inside / at the edge of {p}.', { p: `<b>${esc(dg.reaches)}</b>` }) :
+        t('Would reach {p} in ~{d}.', { p: `<b>${esc(dg.reaches)}</b>`, d: inDur(dg.reaches_min) })) : t('No village within 6 h of fire travel.')}</div>` : '';
+    html = `${eta}<div>${t('Probability of fire: {p}%', { p: p.prob })}</div>${dhtml}
+      <div class="muted small">${t('{fuel}, slope {s}%, elevation {e} m', { fuel: esc(I18N.fuel(p.fuel)), s: p.slope_pct, e: p.elevation_m })}${p.flame_m ? t(', flame length ~{f} m', { f: p.flame_m }) : ''}</div>
+      <div class="muted small">${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}</div>
+      <button class="btn" id="pop-protect">${t('Add as protected asset')}</button>`;
   }
   const pop = new maplibregl.Popup({ maxWidth: '300px' }).setLngLat(lngLat).setHTML(`<div class="pop">${html}</div>`).addTo(map);
   const b = document.getElementById('pop-protect');
@@ -247,7 +252,7 @@ function showAction(id, lngLat) {
   const r = (state.result.recommendations || []).find((x) => x.id === id);
   if (!r) return;
   new maplibregl.Popup({ maxWidth: '320px' }).setLngLat(lngLat)
-    .setHTML(`<div class="pop"><b>${esc(r.title)}</b><div class="muted small">Act before ${clock(r.act_before_epoch)}</div><div class="small">${esc(tokens(r.detail))}</div></div>`)
+    .setHTML(`<div class="pop"><b>${esc(tokens(r.title))}</b><div class="muted small">${t('Start before {t}', { t: clock(r.act_before_epoch) })}</div><div class="small">${esc(tokens(r.detail))}</div></div>`)
     .addTo(map);
 }
 
@@ -280,9 +285,9 @@ $('#start-hours-custom').oninput = (e) => {
 $('#horizon-form').onsubmit = async (e) => {
   e.preventDefault();
   const v = parseFloat($('#horizon-input').value);
-  if (!(v > 0)) return toast('Enter the forecast length in hours (0.5–48).', true);
+  if (!(v > 0)) return toast(t('Enter the forecast window in hours (0.5 to 48).'), true);
   const h = clampHours(v);
-  const r = await busy(`Forecasting the next ${h} h…`, () => api('/api/refresh', { horizon_h: h }));
+  const r = await busy(t('Forecasting the next {h} h', { h }), () => api('/api/refresh', { horizon_h: h }));
   if (r) render(r);
 };
 $('#show-wind').onchange = (e) => {
@@ -296,7 +301,7 @@ $('#start-cancel').onclick = () => {
 $('#start-go').onclick = async () => {
   $('#dlg-start').classList.add('hidden');
   const p = state.pending;
-  const r = await busy('Getting weather, terrain and vegetation…', () =>
+  const r = await busy('Loading weather, terrain and vegetation', () =>
     api('/api/fire', { lat: p.lat, lon: p.lon, started_min_ago: state.startAgo, horizon_h: state.startHours }));
   if (r) { state.view = 'base'; render(r, true); }
   else if (!state.result) $('#hint').classList.remove('hidden');
@@ -336,21 +341,108 @@ $('#search').onsubmit = async (e) => {
       if (r[0]) p = { lat: +r[0].lat, lon: +r[0].lon };
     } catch (_) {}
   }
-  if (!p) return toast('Could not find that place. Try coordinates like 38.56, 21.94', true);
+  if (!p) return toast(t('Location not found. Enter coordinates, e.g. 38.56, 21.94'), true);
   map.flyTo({ center: [p.lon, p.lat], zoom: Math.max(map.getZoom(), 13) });
   if (!state.result) askStart(p.lat, p.lon);
   else showPoint({ lat: p.lat, lng: p.lon });
 };
 
+// Parts of the screen that only make sense with an active incident.
+const INCIDENT_UI = ['#left', '#dock', '#rt', '#legend', '#conf-pill', '#btn-new', '#btn-update', '#horizon-form', '#incident'];
+document.body.classList.add('no-incident');
+
 $('#btn-new').onclick = async () => {
-  if (!confirm('Start over with a new fire? The current forecast will be cleared.')) return;
+  if (!confirm(t('Close the current incident and start a new one? The current forecast will be cleared.'))) return;
   await api('/api/reset', {}).catch(() => {});
   state.result = null;
   state.version = -1;
   clearMap();
-  ['#panel', '#toolbar', '#legend', '#conf-pill', '#btn-new'].forEach((s) => $(s).classList.add('hidden'));
+  INCIDENT_UI.forEach((s) => $(s).classList.add('hidden'));
+  $('#left-tab').classList.add('hidden');
+  document.body.classList.add('no-incident');
   $('#hint').classList.remove('hidden');
 };
+$('#btn-update').onclick = async () => {
+  const r = await busy('Updating forecast with current weather', () => api('/api/refresh', { refetch_weather: true }));
+  if (r) render(r);
+};
+
+// ── Theme and language (remembered per browser) ──────────────────────────
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem('wilson-theme', theme); } catch (_) {}
+  const b = $('#btn-theme');
+  b.textContent = t(theme === 'light' ? 'Dark' : 'Light');
+  b.title = t(theme === 'light' ? 'Switch to the dark theme' : 'Switch to the light theme');
+}
+function applyLanguage(lang) {
+  I18N.set(lang);
+  I18N.apply();
+  $$('#lang-seg button').forEach((x) => x.classList.toggle('on', x.dataset.lang === I18N.lang));
+  applyTheme(document.documentElement.dataset.theme || 'dark');
+  if (typeof applyLayout === 'function' && state.result) applyLayout();
+  if (state.result) render(state.result, false);
+  if (state.tool) $('#draw-text').textContent = t(TOOL_TEXT[state.tool]);
+}
+$('#btn-theme').onclick = () => applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+$('#lang-seg').onclick = (e) => { const b = e.target.closest('button'); if (b) applyLanguage(b.dataset.lang); };
+{
+  // ?theme=light|dark and ?lang=el|en override the saved choice (bookmarks, wall screens).
+  const q = new URLSearchParams(location.search);
+  let theme = 'dark';
+  try { theme = localStorage.getItem('wilson-theme') === 'light' ? 'light' : 'dark'; } catch (_) {}
+  if (q.get('theme') === 'light' || q.get('theme') === 'dark') theme = q.get('theme');
+  applyTheme(theme);
+  if (q.get('lang') === 'el' || q.get('lang') === 'en') I18N.set(q.get('lang'));
+}
+
+// ── Layout: collapsible column, reference panels and dock ────────────────
+const layout = (() => {
+  try { return Object.assign({ left: 'normal', dock: 'open', wx: false, quality: false }, JSON.parse(localStorage.getItem('wilson-layout-v2') || '{}')); }
+  catch (_) { return { left: 'normal', dock: 'open', wx: false, quality: false }; }
+})();
+let savedLayout = null;
+try { savedLayout = localStorage.getItem('wilson-layout-v2'); } catch (_) {}
+if (innerWidth <= 900 && !savedLayout) layout.left = 'hidden';
+function applyLayout() {
+  try { localStorage.setItem('wilson-layout-v2', JSON.stringify(layout)); } catch (_) {}
+  const b = document.body.classList;
+  b.toggle('left-hidden', layout.left === 'hidden');
+  b.toggle('left-wide', layout.left === 'wide');
+  b.toggle('dock-min', layout.dock === 'min');
+  $('#left-wide').textContent = t(layout.left === 'wide' ? 'Narrow' : 'Widen');
+  $('#dock-hide').textContent = t(layout.dock === 'min' ? 'Expand' : 'Minimize');
+  $('#left-tab').classList.toggle('hidden', !state.result || layout.left !== 'hidden');
+  for (const k of ['wx', 'quality']) {
+    $(`#rp-${k}`).classList.toggle('hidden', !layout[k]);
+    $(`#rt-tabs [data-panel="${k}"]`).classList.toggle('on', layout[k]);
+  }
+  map.resize();
+}
+$('#left-hide').onclick = () => { layout.left = 'hidden'; applyLayout(); };
+$('#left-tab').onclick = () => { layout.left = 'normal'; applyLayout(); };
+$('#left-wide').onclick = () => { layout.left = layout.left === 'wide' ? 'normal' : 'wide'; applyLayout(); };
+$('#dock-hide').onclick = () => {
+  layout.dock = layout.dock === 'min' ? 'open' : 'min';
+  document.body.classList.remove('dock-peek');
+  applyLayout();
+};
+// A minimized dock opens while the cursor is over it and closes shortly after it leaves.
+let peekTimer = null;
+$('#dock').addEventListener('mouseenter', () => {
+  clearTimeout(peekTimer);
+  if (layout.dock === 'min') document.body.classList.add('dock-peek');
+});
+$('#dock').addEventListener('mouseleave', () => {
+  clearTimeout(peekTimer);
+  peekTimer = setTimeout(() => document.body.classList.remove('dock-peek'), 300);
+});
+$('#rt-tabs').onclick = (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  layout[b.dataset.panel] = !layout[b.dataset.panel];
+  applyLayout();
+};
+$$('[data-close-panel]').forEach((b) => (b.onclick = () => { layout[b.dataset.closePanel] = false; applyLayout(); }));
 
 function clearMap() {
   ['iso', 'arrows', 'observed', 'recs', 'manual', 'recs-pts', 'manual-pts', 'places', 'draft', 'pin', 'wind'].forEach((s) => map.getSource(s)?.setData(EMPTY));
@@ -359,18 +451,13 @@ function clearMap() {
 
 // ── Toolbar & drawing tools ──────────────────────────────────────────────
 const TOOL_TEXT = {
-  perimeter: 'Tap around the burned area', firebreak: 'Tap along the firebreak line',
-  air_drop: 'Tap the drop line start and end (or one point)', truck: 'Tap where the truck is', protect: 'Tap the place to protect',
+  perimeter: 'Burned area: click points around the perimeter, then Finish.', firebreak: 'Firebreak: click points along the line, then Finish.',
+  air_drop: 'Air drop: click the start and end of the drop line.', truck: 'Engine: click the engine position.', protect: 'Protected asset: click its location.',
 };
 $('#toolbar').onclick = async (e) => {
-  const b = e.target.closest('button'); if (!b) return;
+  const b = e.target.closest('button.tool'); if (!b) return;
   const tool = b.dataset.tool;
   if (tool === 'wind') return $('#dlg-wind').classList.remove('hidden');
-  if (tool === 'refresh') {
-    const r = await busy('Updating forecast…', () => api('/api/refresh', { refetch_weather: true }));
-    if (r) render(r);
-    return;
-  }
   setTool(state.tool === tool ? null : tool);
 };
 
@@ -378,9 +465,9 @@ function setTool(tool) {
   state.tool = tool;
   state.draft = [];
   drawDraft();
-  $$('#toolbar button').forEach((x) => x.classList.toggle('on', x.dataset.tool === tool));
+  $$('#toolbar .tool').forEach((x) => x.classList.toggle('on', x.dataset.tool === tool));
   $('#draw-bar').classList.toggle('hidden', !tool);
-  $('#draw-text').textContent = TOOL_TEXT[tool] || '';
+  $('#draw-text').textContent = TOOL_TEXT[tool] ? t(TOOL_TEXT[tool]) : '';
   const single = tool === 'truck' || tool === 'protect';
   $('#draw-done').classList.toggle('hidden', single);
   $('#draw-undo').classList.toggle('hidden', single);
@@ -412,16 +499,16 @@ async function finishTool(pts) {
   const tool = state.tool;
   setTool(null);
   if (tool === 'perimeter') {
-    if (pts.length < 3) return toast('Tap at least 3 points around the burned area.', true);
-    const r = await busy('Matching the model to the real fire…', () => api('/api/local/perimeter', { polygon: pts, source: 'drawn on map' }));
+    if (pts.length < 3) return toast(t('A burned area needs at least 3 points.'), true);
+    const r = await busy('Calibrating the model to the observed fire', () => api('/api/local/perimeter', { polygon: pts, source: 'drawn on map' }));
     if (r) {
       render(r);
       if (r.observation_result?.calibration) toast(r.observation_result.calibration.text);
     }
   } else if (['firebreak', 'air_drop', 'truck'].includes(tool)) {
-    if (tool === 'firebreak' && pts.length < 2) return toast('A firebreak needs at least 2 points.', true);
+    if (tool === 'firebreak' && pts.length < 2) return toast(t('A firebreak needs at least 2 points.'), true);
     if (!pts.length) return;
-    const r = await busy('Testing your action…', () => api('/api/plan', { add: { type: tool, points: pts } }));
+    const r = await busy('Simulating the action', () => api('/api/plan', { add: { type: tool, points: pts } }));
     if (r) { state.view = 'plan'; render(r); }
   }
 }
@@ -438,8 +525,8 @@ $('#wind-go').onclick = async () => {
   const body = { wind_kmh: +$('#wind-speed').value, wind_dir_deg: state.windDir, source: 'reported in app' };
   if ($('#wind-temp').value !== '') body.temp_c = +$('#wind-temp').value;
   if ($('#wind-rh').value !== '') body.rh = +$('#wind-rh').value;
-  const r = await busy('Updating with local wind…', () => api('/api/local/weather', body));
-  if (r) { render(r); toast('Local wind applied.'); }
+  const r = await busy('Applying measured wind', () => api('/api/local/weather', body));
+  if (r) { render(r); toast(t('Measured wind applied.')); }
 };
 $$('[data-close]').forEach((b) => (b.onclick = () => b.closest('.dlg').classList.add('hidden')));
 
@@ -453,15 +540,12 @@ function askName(lngLat) {
 $('#name-go').onclick = async () => {
   $('#dlg-name').classList.add('hidden');
   const p = state.namePos;
-  const r = await busy('Calculating time to impact…', () =>
-    api('/api/destination', { lat: p.lat, lon: p.lng, name: $('#name-input').value.trim() || 'Protected place' }));
+  const r = await busy('Calculating time to impact', () =>
+    api('/api/destination', { lat: p.lat, lon: p.lng, name: $('#name-input').value.trim() || t('Protected asset') }));
   if (r) render(r);
 };
 $('#name-input').onkeydown = (e) => { if (e.key === 'Enter') $('#name-go').click(); };
 
-
-// Mobile: tap the grip to expand the sheet
-$('#panel-grip').onclick = () => $('#panel').classList.toggle('expanded');
 
 // ── Rendering ────────────────────────────────────────────────────────────
 const urgencyClass = (epoch) => {
@@ -469,15 +553,12 @@ const urgencyClass = (epoch) => {
   const m = (epoch * 1000 - Date.now()) / 60000;
   return m < 60 ? 'u-0' : m < 120 ? 'u-1' : m < 180 ? 'u-2' : 'u-3';
 };
-const urgencyColor = { 'u-0': '#ff6b6b', 'u-1': '#ffa45c', 'u-2': '#ffd34d', 'u-3': '#e5e7eb' };
-const ACTION_ICON = {
-  firebreak: '<svg viewBox="0 0 24 24"><path d="M3 20L21 4" stroke-dasharray="3 2"/></svg>',
-  air_drop: '<svg viewBox="0 0 24 24"><path d="M12 3c3 5 6 8 6 11a6 6 0 0 1-12 0c0-3 3-6 6-11z"/></svg>',
-  truck: '<svg viewBox="0 0 24 24"><path d="M2 7h11v9H2zM13 10h5l3 3v3h-8z"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>',
-  evacuate: '<svg viewBox="0 0 24 24"><path d="M12 4v10M12 19v1"/></svg>',
-};
-const arrowSvg = '<svg viewBox="0 0 48 48"><path d="M24 3 L42 40 L24 31 L6 40 Z" fill="#ff3b1f" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/></svg>';
-const windSvg = (deg) => `<svg viewBox="0 0 48 48" style="transform:rotate(${deg + 180}deg)"><circle cx="24" cy="24" r="22" fill="#262a31"/><path d="M24 6 L34 30 L24 24 L14 30 Z" fill="#9ecbff"/></svg>`;
+const urgencyColor = { 'u-0': '#ff7b74', 'u-1': '#f2a25c', 'u-2': '#e9c75a', 'u-3': '#d6dbe2' };
+const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+const compass = (deg) => t(COMPASS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16]);
+const ACTION_KIND_EN = { firebreak: 'Firebreak', air_drop: 'Air drop', truck: 'Engine', evacuate: 'Evacuation' };
+const ACTION_KIND = new Proxy(ACTION_KIND_EN, { get: (o, k) => (o[k] ? t(o[k]) : undefined) });
+const arrowSvg = '<svg viewBox="0 0 40 40"><path d="M20 3 L35 35 L20 27 L5 35 Z" fill="#d63a1e" stroke="#e6e9ee" stroke-width="1.5"/></svg>';
 
 let mapReady = false;
 
@@ -488,13 +569,19 @@ function render(r, fit = false) {
   state.version = r.version;
   if (!r.plan) state.view = 'base';
 
-  ['#panel', '#toolbar', '#legend', '#conf-pill', '#btn-new'].forEach((s) => $(s).classList.remove('hidden'));
+  INCIDENT_UI.forEach((s) => $(s).classList.remove('hidden'));
+  document.body.classList.remove('no-incident');
   $('#hint').classList.add('hidden');
+  if (first) applyLayout();
 
   state.planNo = {};
   r.recommendations.filter((x) => x.enabled).forEach((x, i) => (state.planNo[x.id] = i + 1));
   const c = r.confidence;
-  $('#conf-pill').innerHTML = `<span class="dot g-${c.grade}"></span><span class="long">${gradeText[c.grade]} confidence · </span>${c.score}%`;
+  $('#conf-pill').className = `conf g-${c.grade}`;
+  $('#conf-pill').innerHTML = `${t('Confidence')}<b>${gradeText[c.grade]} ${c.score}%</b>`;
+  const ig = r.incident.ignition;
+  $('#incident').innerHTML = `<b>${t('Incident {pos}', { pos: `${ig.lat.toFixed(4)}, ${ig.lon.toFixed(4)}` })}</b><br>
+    <span class="muted">${t('Ignition {t0} · forecast to {t1}', { t0: clock(r.incident.t0_epoch), t1: clock(r.incident.end_epoch) })}</span>`;
   renderHeadline(r);
   renderResources(r);
   renderView(r);
@@ -513,6 +600,16 @@ function render(r, fit = false) {
   else state.fitPending = true;
 }
 
+function legendHtml(danger) {
+  if (danger)
+    return `<div class="lg-title">${t('Danger class')}</div>` +
+      [1, 2, 3, 4, 5].map((i) => `<div class="it"><i class="dg-${i}"></i>${I18N.danger(i)}</div>`).reverse().join('');
+  return `<div class="lg-title">${t('Fire arrival')}</div>
+    <div class="it"><i style="background:rgba(45,25,25,.85)"></i>${t('Burned')}</div><div class="it"><i style="background:#e11e1e"></i>${t('Within 1 h')}</div>
+    <div class="it"><i style="background:#f57314"></i>${t('1 to 2 h')}</div><div class="it"><i style="background:#fab923"></i>${t('2 to 3 h')}</div>
+    <div class="it"><i style="background:#fae85a"></i>${t('Later')}</div><div class="it"><i class="hatch"></i>${t('Possible (pessimistic)')}</div>`;
+}
+
 function updateMap(r, fit) {
   const L = (state.view === 'plan' && r.plan) ? r.plan : r.base;
   map.setLayoutProperty('zones', 'visibility', 'visible');
@@ -525,11 +622,7 @@ function updateMap(r, fit) {
   map.getSource('iso').setData(L.isochrones);
   map.getSource('arrows').setData(state.view === 'base' && !prob ? r.base.arrows : EMPTY);
   $('#legend').classList.toggle('hidden', prob);
-  $('#legend').innerHTML = danger
-    ? DANGER_NAMES.slice(1).map((n, i) => `<div><i class="dg-${i + 1}"></i>${n}</div>`).reverse().join('')
-    : `<div><i style="background:rgba(45,25,25,.85)"></i>Burned</div><div><i style="background:#e11e1e"></i>Within 1 h</div>
-       <div><i style="background:#f57314"></i>1–2 h</div><div><i style="background:#fab923"></i>2–3 h</div>
-       <div><i style="background:#fae85a"></i>Later</div><div><i class="hatch"></i>Possible</div>`;
+  $('#legend').innerHTML = legendHtml(danger);
   map.getSource('observed').setData(r.observed);
   const ig = r.incident.ignition;
   map.getSource('pin').setData({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [ig.lon, ig.lat] }, properties: {} }] });
@@ -538,55 +631,67 @@ function updateMap(r, fit) {
   const pts = (items, label) => ({ type: 'FeatureCollection', features: items.map((x) => ({
     type: 'Feature', geometry: { type: 'Point', coordinates: geomCenter(x.geometry) },
     properties: { id: x.id, type: x.type, enabled: x.enabled ?? true, label: label(x) } })) });
-  const inPlan = r.recommendations.filter((x) => x.enabled);
-  map.getSource('recs').setData(fc(inPlan.filter((x) => x.geometry.type !== 'Point'), (x) => String(state.planNo[x.id] || '')));
-  map.getSource('recs-pts').setData(pts(inPlan, (x) => String(state.planNo[x.id] || '')));
-  map.getSource('manual').setData(fc(r.manual.filter((x) => x.geometry.type !== 'Point'), () => 'yours'));
-  map.getSource('manual-pts').setData(pts(r.manual, () => 'yours'));
+  const shown = r.recommendations.filter((x) => x.enabled || (x.simulated && x.selected));
+  const lbl = (x) => x.enabled ? String(state.planNo[x.id] || '') : 'R';
+  map.getSource('recs').setData(fc(shown.filter((x) => x.geometry.type !== 'Point'), lbl));
+  map.getSource('recs-pts').setData(pts(shown, lbl));
+  map.getSource('manual').setData(fc(r.manual.filter((x) => x.geometry.type !== 'Point'), () => t('OWN')));
+  map.getSource('manual-pts').setData(pts(r.manual, () => t('OWN')));
   map.getSource('places').setData({ type: 'FeatureCollection', features: r.destinations.filter((d) => !d.boundary && (d.eta_epoch || d.user)).map((d) => {
     const dd = (state.view === 'plan' && d.with_plan) ? d.with_plan : d;
     const u = urgencyClass(dd.eta_epoch);
     return { type: 'Feature', geometry: { type: 'Point', coordinates: [d.lon, d.lat] },
-      properties: { label: `${d.name}\n${dd.burning_now ? 'burning' : dd.eta_epoch ? clock(dd.eta_epoch) : 'safe'}`, color: urgencyColor[u] } };
+      properties: { label: `${d.name}\n${dd.burning_now ? t('BURNING') : dd.eta_epoch ? clock(dd.eta_epoch) : t('not reached')}`, color: urgencyColor[u] } };
   }) });
 
   if (fit) {
     const g = r.grid;
-    // Fit to where the fire may go, not the whole data area.
+    // Fit to where the fire may go, inside the part of the map left free by the panels.
     let b = r.extent || [ig.lon, ig.lat, ig.lon, ig.lat];
     if (b[2] - b[0] < 0.01) b = [b[0] - 0.01, b[1] - 0.01, b[2] + 0.01, b[3] + 0.01];
-    const pad = 0.004, desktop = innerWidth > 820;
+    const pad = 0.004;
+    const left = $('#left').offsetParent && !document.body.classList.contains('left-hidden') ? $('#left').offsetWidth + 40 : 50;
+    const bottom = ($('#dock').offsetParent ? $('#dock').offsetHeight : 0) + 40;
+    const rt = $('#rt').offsetParent ? Math.min(innerWidth * 0.35, $('#rt').offsetWidth + 30) : 60;
+    const pd = { top: 80, bottom, left: Math.min(left, innerWidth * 0.45), right: Math.min(rt, innerWidth * 0.3) };
     map.fitBounds([[Math.max(g.west, b[0] - pad), Math.max(g.south, b[1] - pad)], [Math.min(g.east, b[2] + pad), Math.min(g.north, b[3] + pad)]],
-      { padding: desktop ? { top: 90, bottom: 110, left: 60, right: 440 } : { top: 80, bottom: innerHeight * 0.5, left: 30, right: 30 }, duration: 800, maxZoom: 15 });
+      { padding: pd, duration: 800, maxZoom: 15 });
   }
 }
 
 function renderHeadline(r) {
   const s = r.summary;
   const intensity = s.max_flame_m < 1.2 ? 0 : s.max_flame_m < 2.4 ? 1 : s.max_flame_m < 3.4 ? 2 : 3;
-  const shift = r.weather.shift ? `<div class="alert">⚠ ${esc(tokens(r.weather.shift.text))}</div>` : '';
+  const shift = r.weather.shift ? `<div class="alert">${esc(tokens(r.weather.shift.text))}</div>` : '';
   const grow = s.area_ha_end - s.area_ha_now;
+  const lvl = r.danger.fire_area_level;
   $('#headline').innerHTML = `
-    <div class="dir">
-      <div class="arrow">${arrowSvg.replace('<svg', `<svg style="transform:rotate(${s.direction_deg}deg)"`)}</div>
-      <div><div class="muted small">FIRE IS MOVING</div><div class="big">Towards the ${esc(s.direction_text)}</div>
-      <div class="muted">up to <b style="color:var(--text)">${s.head_speed_kmh} km/h</b></div></div>
+    <h3>${t('Fire behaviour')}</h3>
+    <div class="fb-dir">
+      <div class="fb-arrow">${arrowSvg.replace('<svg', `<svg style="transform:rotate(${s.direction_deg}deg)"`)}</div>
+      <div><div class="lbl">${t('Head of fire moving')}</div><div class="big">${t('Towards {dir} ({deg}°)', { dir: esc(I18N.dir(s.direction_text)), deg: Math.round(s.direction_deg) })}</div>
+        <div class="muted">${t('Forecast window {t0} to {t1}', { t0: clock(r.incident.now_epoch), t1: clock(r.incident.end_epoch) })}</div></div>
     </div>
     <div class="stats">
-      <div class="stat"><span class="muted small">Flames up to</span><b>${s.max_flame_m} m</b></div>
-      <div class="stat"><span class="muted small">Burned now</span><b>${s.area_ha_now.toLocaleString()}<small> ha</small></b></div>
-      <div class="stat"><span class="muted small">By ${clock(r.incident.end_epoch)}</span><b>+${Math.max(0, grow).toLocaleString()}<small> ha</small></b></div>
+      <div class="stat"><span>${t('Head spread')}</span><b>${s.head_speed_kmh}<small> km/h</small></b></div>
+      <div class="stat"><span>${t('Flame length')}</span><b>${s.max_flame_m}<small> m</small></b></div>
+      <div class="stat"><span>${t('Head reach')}</span><b>${s.head_reach_km ?? 0}<small> km</small></b></div>
+      <div class="stat"><span>${t('Burned now')}</span><b>${s.area_ha_now.toLocaleString()}<small> ha</small></b></div>
+      <div class="stat"><span>${t('New growth')}</span><b>+${Math.max(0, grow).toLocaleString()}<small> ha</small></b></div>
+      <div class="stat"><span>${t('Area at end')}</span><b>${s.area_ha_end.toLocaleString()}<small> ha</small></b></div>
     </div>
-    <div class="advice i${intensity}">${esc(s.attack_advice)}</div>
-    <div class="danger-here dg-${r.danger.fire_area_level}" style="cursor:pointer" id="danger-chip">
-      Area danger: ${DANGER_NAMES[r.danger.fire_area_level]} — tap to see the danger map</div>${shift}`;
+    <div class="advice i${intensity}">${esc(tokens(s.attack_advice))}</div>
+    <div class="danger-here" id="danger-chip" title="${t('Show the danger map')}">
+      <span><i class="sw dg-${lvl}"></i>${t('Area danger class: {c}', { c: `<b>${I18N.danger(lvl)}</b>` })}</span><span class="lnk">${t('Danger map')}</span></div>${shift}`;
   $('#danger-chip').onclick = () => { state.mode = 'danger'; render(state.result, false); $('#view-switch').scrollIntoView({ behavior: 'smooth' }); };
 }
 
 function renderView(r) {
   $$('#mode-seg button').forEach((b) => b.classList.toggle('on', b.dataset.mode === state.mode));
-  $('#plan-seg').classList.toggle('hidden', !r.plan);
   $$('#plan-seg button').forEach((b) => b.classList.toggle('on', b.dataset.view === state.view));
+  const planBtn = $('#plan-seg [data-view="plan"]');
+  planBtn.disabled = !r.plan;
+  planBtn.title = t(r.plan ? 'Forecast with the applied actions' : 'No actions applied yet. Switch on an action or draw your own.');
   const prob = state.mode === 'prob';
   $('#prob-ctl').classList.toggle('hidden', !prob);
   $('#danger-ctl').classList.toggle('hidden', state.mode !== 'danger');
@@ -602,26 +707,26 @@ function renderView(r) {
   $$('#scen-n button').forEach((b) => b.classList.toggle('on', +b.dataset.n === r.settings.members));
   $('#scen-wide').checked = r.settings.wide;
   let txt = '';
-  if (prob) txt = `Colours show in how many of the ${r.settings.members} scenarios the fire reaches each spot. ` +
-    (r.settings.wide ? 'Wide range: inputs are treated as very uncertain.' : 'Use the wide range when wind or fuel are unclear.');
+  if (prob) txt = t('Share of the {n} scenarios in which fire reaches each cell.', { n: r.settings.members }) +
+    (r.settings.wide ? t(' Wide uncertainty is on.') : '');
   else if (state.mode === 'danger') txt = '';
-  else if (r.plan) txt = r.plan.saved_ha > 0 ? `With the plan about ${r.plan.saved_ha} ha less burns by ${clock(r.incident.end_epoch)}.`
-    : 'The plan barely changes the burned area — see each place below.';
+  else if (r.plan) txt = r.plan.saved_ha > 0 ? t('With the plan: about {ha} ha less burned by {t}.', { ha: r.plan.saved_ha, t: clock(r.incident.end_epoch) })
+    : t('The plan does not materially reduce the burned area. See places at risk.');
   $('#plan-gain').textContent = txt;
 }
 
 function fmtLead(min) {
   const m = Math.round(min);
-  if (m < 60) return `${m} min`;
+  if (m < 60) return I18N.tr(`${m} min`);
   const h = Math.floor(m / 60), r = m % 60;
-  return r ? `${h} h ${r}` : `${h} h`;
+  return I18N.tr(r ? `${h} h ${r} min` : `${h} h`);
 }
 
 function probHourText() {
   const r = state.result;
   if (!r) return;
   const e = (r.frames || [])[state.probHour - 1] ?? r.incident.now_epoch + state.probHour * 3600;
-  $('#prob-hour-text').textContent = `+${fmtLead((e - r.incident.now_epoch) / 60)} · ${clock(e)}`;
+  $('#prob-hour-text').textContent = `+${fmtLead((e - r.incident.now_epoch) / 60)} (${clock(e)})`;
 }
 
 // Wind arrows for one frame of result.wind_field (0 = now, i = frames[i-1]).
@@ -633,11 +738,6 @@ function windFeatures(r, frame) {
     type: 'Feature', geometry: { type: 'Point', coordinates: p }, properties: { to: f.to[i], kmh: f.kmh[i] } })) };
 }
 
-const DANGER_NAMES = ['None', 'Low', 'Moderate', 'High', 'Very high', 'Extreme'];
-const DANGER_HELP = {
-  1: 'fire spreads slowly here', 2: 'fire spreads moderately', 3: 'fast fire, or a place within reach',
-  4: 'fast fire with places within reach', 5: 'very fast fire close to places',
-};
 
 function renderDanger(r) {
   const d = r.danger;
@@ -645,16 +745,15 @@ function renderDanger(r) {
   const total = d.area_by_class.reduce((a, x) => a + x.ha, 0) || 1;
   const bar = d.area_by_class.map((x, i) => `<i class="dg-${i + 1}" style="width:${(100 * x.ha) / total}%"></i>`).join('');
   const zones = d.places.length ? d.places.map((p) => `<div class="dz" data-lat="${p.lat}" data-lon="${p.lon}">
-      <b>${esc(p.name)}</b><br>Fire anywhere within <b>${p.reach_km} km</b> to the ${esc(p.from_dir)} would reach it in under 1 h
-      <span class="muted">(${p.zone_ha} ha of ground, spreading up to ${p.max_ros_kmh} km/h)</span></div>`).join('')
-    : '<div class="muted small">No village can be reached within 1 h from its surroundings.</div>';
+      ${t('{name}: fire within {km} km to the {dir} reaches it in under 1 h', { name: `<b>${esc(p.name)}</b>`, km: `<b>${p.reach_km}</b>`, dir: esc(I18N.dir(p.from_dir)) })}
+      <span class="muted">${t('({ha} ha, spread up to {v} km/h)', { ha: p.zone_ha, v: p.max_ros_kmh })}</span></div>`).join('')
+    : `<div class="note">${t('No settlement can be reached within 1 h from its surroundings.')}</div>`;
   $('#danger-ctl').innerHTML = `
-    <div class="danger-here dg-${lvl}">The fire is in a ${DANGER_NAMES[lvl].toUpperCase()} danger area</div>
-    <div class="small muted" style="margin-top:8px">Danger combines how fast fire would spread from each spot with how quickly it
-      would reach a village or other important place. It is worst around ${clock(d.peak_epoch)}.</div>
+    <div class="note">${t('Fire area is in danger class {c}. Danger combines potential spread rate with travel time to settlements and marked assets. Peak at {t}.',
+      { c: `<b class="dtx-${lvl}">${I18N.danger(lvl)}</b>`, t: clock(d.peak_epoch) })}</div>
     <div class="danger-bar">${bar}</div>
-    <div class="danger-keys"><span>Low</span><span>Extreme</span></div>
-    <h3>1-hour danger zones around places</h3>${zones}`;
+    <div class="danger-keys"><span>${I18N.danger(1)}</span><span>${I18N.danger(5)}</span></div>
+    <h3>${t('1-hour exposure zones')}</h3>${zones}`;
   $$('#danger-ctl .dz').forEach((el) => (el.onclick = () => map.flyTo({ center: [+el.dataset.lon, +el.dataset.lat], zoom: 13 })));
 }
 
@@ -666,11 +765,11 @@ function renderResources(r) {
     const v = r.resources[k];
     if (!resTimer) row.querySelector('.res-n').textContent = v.available;
     const use = row.querySelector('.res-use');
-    use.textContent = v.available ? `${v.used} in plan` : '';
+    use.textContent = v.available ? t('{n} assigned', { n: v.used }) : '';
     use.classList.toggle('full', v.available > 0 && v.used >= v.available);
   }
-  $('#plan-notes').innerHTML = (r.plan_notes || []).map((n) =>
-    `<div class="${n.startsWith('1 more') ? 'ask' : ''}">${n.startsWith('1 more') ? 'Ask for: ' : ''}${esc(tokens(n))}</div>`).join('');
+  $('#plan-notes').innerHTML = (r.plan_notes || []).map((n) => n.startsWith('1 more')
+    ? `<span>${t('Request: {s}', { s: esc(tokens(n)) })}</span>` : `<span class="reserve">${esc(tokens(n))}</span>`).join('');
 }
 
 $('#res-card').addEventListener('click', (e) => {
@@ -682,7 +781,7 @@ $('#res-card').addEventListener('click', (e) => {
     const body = {};
     for (const k of RES) body[k] = +$(`.res-row[data-res="${k}"] .res-n`).textContent;
     resTimer = null;
-    const res = await busy('Planning with your resources…', () => api('/api/resources', body));
+    const res = await busy('Re-planning for available resources', () => api('/api/resources', body));
     if (res) render(res);
   }, 700);
 });
@@ -693,7 +792,7 @@ $('#mode-seg').onclick = (e) => {
   render(state.result, false);
 };
 $('#plan-seg').onclick = (e) => {
-  const b = e.target.closest('button'); if (!b || !state.result) return;
+  const b = e.target.closest('button'); if (!b || b.disabled || !state.result) return;
   state.view = b.dataset.view;
   render(state.result, false);
 };
@@ -704,46 +803,46 @@ $('#prob-hour').oninput = (e) => {
 };
 $('#scen-n').onclick = async (e) => {
   const b = e.target.closest('button'); if (!b) return;
-  const res = await busy(`Running ${b.dataset.n} scenarios…`, () => api('/api/settings', { members: +b.dataset.n }));
+  const res = await busy(t('Running {n} scenarios', { n: b.dataset.n }), () => api('/api/settings', { members: +b.dataset.n }));
   if (res) render(res);
 };
 $('#scen-wide').onchange = async (e) => {
-  const res = await busy('Exploring a wider range of conditions…', () => api('/api/settings', { wide: e.target.checked }));
+  const res = await busy('Re-running with wide uncertainty', () => api('/api/settings', { wide: e.target.checked }));
   if (res) render(res);
 };
 
 function renderPlaces(r) {
   const list = r.destinations.filter((d) => d.eta_epoch || d.user || d.prob >= 20);
   if (!list.length) {
-    $('#places').innerHTML = `<div class="muted">No villages or marked places reached in the next ${r.incident.horizon_h} h.
-      Tap the map anywhere to see when fire could get there.</div>`;
+    $('#places').innerHTML = `<div class="note">${t('No settlements or marked assets reached within the {h} h window. Click any point on the map for its expected arrival time.', { h: r.incident.horizon_h })}</div>`;
     return;
   }
-  $('#places').innerHTML = list.slice(0, 15).map((d) => {
+  const rows = list.slice(0, 20).map((d) => {
     const dd = (state.view === 'plan' && d.with_plan) ? d.with_plan : d;
     const u = urgencyClass(dd.eta_epoch);
-    const icon = d.kind === 'road' ? '═' : d.kind === 'river' ? '≈' : d.user ? '★' : '⌂';
     let eta;
-    if (dd.burning_now) eta = 'Burning<small>now</small>';
-    else if (dd.eta_epoch) eta = `${inMinutes(dd.eta_epoch)}<small>~${clock(dd.eta_epoch)}</small>`;
-    else eta = `Not expected<small>${dd.prob ?? d.prob}% chance</small>`;
-    const delta = (state.view === 'plan' && d.with_plan?.delay_text) ? `<div class="plan-delta">With actions: ${esc(d.with_plan.delay_text)}</div>` : '';
-    const what = d.boundary ? (d.kind === 'river' ? 'River reached' : 'Road reached') : esc(d.kind === 'user' ? 'Marked place' : d.kind);
-    return `<div class="place" data-lat="${d.lat}" data-lon="${d.lon}">
-      <div class="ico ${u}">${icon}</div>
-      <div class="main"><div class="name">${esc(d.name)}</div>
-        <div class="muted small">${what} · <span class="t-${d.grade}">${gradeText[d.grade]} confidence</span></div>
-        <div class="bar" title="${dd.prob ?? d.prob}% chance fire reaches it"><i style="width:${dd.prob ?? d.prob}%;background:${urgencyColor[u]}"></i></div>${delta}</div>
-      <div class="eta">${eta}</div></div>`;
+    if (dd.burning_now) eta = t('Burning');
+    else if (dd.eta_epoch) eta = `${clock(dd.eta_epoch)}<small>${t('in {d}', { d: inMinutes(dd.eta_epoch) })}</small>`;
+    else eta = t('Not expected');
+    const delta = (state.view === 'plan' && d.with_plan?.delay_text) ? `<div class="plan-delta">${t('With plan: {s}', { s: esc(tokens(d.with_plan.delay_text)) })}</div>` : '';
+    const kind = d.boundary ? t(d.kind === 'river' ? 'River' : 'Road') : d.kind === 'user' ? t('Marked asset') : I18N.kind(d.kind);
+    return `<tr class="place" data-lat="${d.lat}" data-lon="${d.lon}">
+      <td class="urg ${u}"></td>
+      <td><div class="pl-name">${esc(d.name)}</div><div class="pl-kind">${esc(kind)}</div>${delta}</td>
+      <td class="r pl-eta">${eta}</td>
+      <td class="r">${dd.prob ?? d.prob}%</td>
+      <td class="r t-${d.grade}">${gradeText[d.grade]}</td></tr>`;
   }).join('');
+  $('#places').innerHTML = `<table class="places"><thead><tr><th class="urg"></th><th>${t('Place')}</th><th class="r">${t('Arrival')}</th>
+    <th class="r">${t('Prob.')}</th><th class="r">${t('Conf.')}</th></tr></thead><tbody>${rows}</tbody></table>`;
   $$('#places .place').forEach((el) => (el.onclick = () => map.flyTo({ center: [+el.dataset.lon, +el.dataset.lat], zoom: 14 })));
 }
 
 const fmtLL = (c) => `${c[1].toFixed(5)}, ${c[0].toFixed(5)}`;
 function coordText(g) {
-  if (g.type === 'Point') return `📍 ${fmtLL(g.coordinates)}`;
+  if (g.type === 'Point') return fmtLL(g.coordinates);
   const c = g.coordinates;
-  return `📍 ${fmtLL(c[0])} → ${fmtLL(c[c.length - 1])}`;
+  return `${fmtLL(c[0])} → ${fmtLL(c[c.length - 1])}`;
 }
 
 function geomCenter(g) {
@@ -753,54 +852,63 @@ function geomCenter(g) {
   return c[Math.floor(c.length / 2)];
 }
 
-const RES_LABEL = { aircraft: 'aircraft', trucks: 'fire truck', dozers: 'bulldozer' };
+const RES_LABEL = { aircraft: 'aircraft', trucks: 'engine', dozers: 'dozer' };
 
-function actionCard(x, inPlan, now) {
+// status: 'applied' (switched on by the user), 'recommended' (the planner's
+// choice for the available resources, not applied) or 'other'.
+function actionCard(x, status, now) {
   const late = x.act_before_epoch - now < 15 * 60;
-  const when = x.type === 'evacuate' ? 'Now' : late ? `Now — before ${clock(x.act_before_epoch)}` : `Before ${clock(x.act_before_epoch)}`;
+  const when = x.type === 'evacuate' ? t('Immediately') : late ? t('Immediately (before {t})', { t: clock(x.act_before_epoch) }) : t('Start before {t}', { t: clock(x.act_before_epoch) });
   let conf = '';
-  if (!x.simulated) conf = `<span class="t-${x.grade}">${x.confidence}% of forecasts</span>`;
-  else if (inPlan) conf = `<span class="t-${x.grade}">works in ${x.confidence}% of scenarios</span>`;
-  else conf = `<span class="muted">needs a free ${RES_LABEL[x.resource] || 'resource'}</span>`;
-  const no = inPlan ? `${state.planNo[x.id] || '•'}. ` : '';
-  const tag = x.forced ? '<span class="tag you">added by you</span>' : '';
-  return `<div class="action ${inPlan || !x.simulated ? '' : 'off'}" data-id="${x.id}">
-      <div class="num k-${x.type}">${ACTION_ICON[x.type] || ''}</div>
-      <div><div class="title">${no}${esc(x.title)}${tag}</div>
-        ${inPlan || !x.simulated ? `<div class="when ${late ? 'late' : ''}">${when}</div>` : ''}
-        <div class="detail">${esc(tokens(x.detail))}</div>
-        <div class="coords" title="Tap to copy">${coordText(x.geometry)}</div>
-        <div class="effect">${x.effect ? esc(tokens(x.effect)) + ' · ' : ''}${conf}</div></div>
-      <div>${x.simulated ? `<label class="switch" title="${inPlan ? 'Remove from the plan' : 'Add to the plan'}"><input type="checkbox" data-key="${esc(x.key)}" ${inPlan ? 'checked' : ''}><span></span></label>` : ''}</div>
+  if (!x.simulated) conf = `<span class="t-${x.grade}">${t('{p}% of forecasts', { p: x.confidence })}</span>`;
+  else if (status !== 'other') conf = `<span class="t-${x.grade}">${t('Effective in {p}% of scenarios', { p: x.confidence })}</span>`;
+  else conf = t('Requires an additional {r}', { r: t(RES_LABEL[x.resource] || 'resource') });
+  const no = status === 'applied' && state.planNo[x.id] ? `${state.planNo[x.id]}. ` : '';
+  const tag = !x.simulated ? ` <span class="tag">${t('Advisory')}</span>`
+    : status === 'applied' ? ` <span class="tag you">${t('Applied')}</span>`
+    : status === 'recommended' ? ` <span class="tag rec">${t('Recommended')}</span>` : '';
+  const cls = status === 'applied' || !x.simulated ? '' : status === 'recommended' ? 'rec' : 'off other';
+  return `<div class="action k-${x.type} ${cls}" data-id="${x.id}">
+      <div class="ahead"><span class="kind">${ACTION_KIND[x.type] || x.type}${tag}</span>
+        ${x.simulated ? `<label class="switch" title="${t(status === 'applied' ? 'Remove from the plan' : 'Apply this action')}"><input type="checkbox" data-key="${esc(x.key)}" ${status === 'applied' ? 'checked' : ''}><span></span></label>` : ''}</div>
+      <div class="title">${no}${esc(tokens(x.title))}</div>
+      ${status !== 'other' ? `<div class="when ${late ? 'late' : ''}">${when}</div>` : ''}
+      <div class="detail" title="${esc(tokens(x.detail))}">${esc(tokens(x.detail))}</div>
+      <div class="coords" title="${t('Click to copy')}">${coordText(x.geometry)}</div>
+      <div class="effect">${x.effect ? esc(tokens(x.effect)) + ' ' : ''}${conf}</div>
     </div>`;
 }
 
 function renderActions(r) {
   const now = Date.now() / 1000;
-  const plan = r.recommendations.filter((x) => !x.simulated || x.enabled);
-  const others = r.recommendations.filter((x) => x.simulated && !x.enabled).sort((a, b) => b.gain - a.gain);
-  const own = r.manual.map((m) => `<div class="action" data-mid="${m.id}">
-      <div class="num k-${m.type}">${ACTION_ICON[m.type]}</div>
-      <div><div class="title">Your ${m.type === 'air_drop' ? 'water drop' : m.type}<span class="tag you">drawn by you</span></div>
-        <div class="when">Active from ${clock(m.active_from_epoch)}</div></div>
-      <div><button class="x" data-remove="${m.id}" title="Remove">×</button></div></div>`);
-  let html = plan.map((x) => actionCard(x, true, now)).concat(own).join('');
-  if (!html) html = '<div class="muted">No action is worth a resource right now — keep monitoring, or add resources above.</div>';
-  if (others.length)
-    html += `<details class="others"><summary>Other options (${others.length}) — need more resources or help less</summary>
-      ${others.map((x) => actionCard(x, false, now)).join('')}</details>`;
+  const applied = r.recommendations.filter((x) => !x.simulated || x.enabled);
+  const recommended = r.recommendations.filter((x) => x.simulated && !x.enabled && x.selected);
+  const others = r.recommendations.filter((x) => x.simulated && !x.enabled && !x.selected).sort((a, b) => b.gain - a.gain);
+  const own = r.manual.map((m) => `<div class="action k-${m.type}" data-mid="${m.id}">
+      <div class="ahead"><span class="kind">${ACTION_KIND[m.type]} <span class="tag you">${t('Own')}</span></span>
+        <button class="lnk" data-remove="${m.id}">${t('Remove')}</button></div>
+      <div class="title">${t('Own {k}', { k: (ACTION_KIND[m.type] || m.type).toLowerCase() })}</div>
+      <div class="when">${t('Active from {t}', { t: clock(m.active_from_epoch) })}</div>
+      <div class="coords" title="${t('Click to copy')}">${coordText(m.geometry)}</div></div>`);
+  let html = applied.map((x) => actionCard(x, 'applied', now)).concat(own).join('');
+  if (!html) html = `<div class="empty">${t('No actions applied.')} ${t(recommended.length ? 'Switch on a recommended action, or draw your own.' : 'Enter available resources for recommendations, or draw your own.')}</div>`;
+  if (recommended.length) html += `<div class="sep">${t('Recommended actions')}</div>` + recommended.map((x) => actionCard(x, 'recommended', now)).join('');
+  if (others.length) html += `<div class="sep">${t('Other options')}</div>` + others.map((x) => actionCard(x, 'other', now)).join('');
   $('#actions').innerHTML = html;
+  const n = applied.filter((x) => x.simulated).length + r.manual.length;
+  $('#dock-summary').textContent = t('{n} applied', { n }) + (r.plan && r.plan.saved_ha > 0 ? t(' (about {ha} ha saved)', { ha: r.plan.saved_ha }) : '') +
+    t(', {r} recommended, {o} other options', { r: recommended.length, o: others.length });
 
   $$('#actions input[type=checkbox]').forEach((cb) => (cb.onchange = async () => {
-    const res = await busy('Re-planning…', () => api('/api/plan', { toggle: { key: cb.dataset.key, enabled: cb.checked } }));
+    const res = await busy(cb.checked ? 'Applying action' : 'Removing action', () => api('/api/plan', { toggle: { key: cb.dataset.key, enabled: cb.checked } }));
     if (res) render(res);
   }));
   $$('#actions [data-remove]').forEach((b) => (b.onclick = async () => {
-    const res = await busy('Removing…', () => api('/api/plan', { remove: b.dataset.remove }));
+    const res = await busy('Removing action', () => api('/api/plan', { remove: b.dataset.remove }));
     if (res) render(res);
   }));
   $$('#actions .coords').forEach((el) => (el.onclick = () => {
-    navigator.clipboard?.writeText(el.textContent.replace('📍 ', '')).then(() => toast('Coordinates copied.'), () => {});
+    navigator.clipboard?.writeText(el.textContent).then(() => toast(t('Coordinates copied.')), () => {});
   }));
   $$('#actions .title').forEach((t) => (t.onclick = () => {
     const card = t.closest('.action');
@@ -811,28 +919,36 @@ function renderActions(r) {
 
 function renderWeather(r) {
   const w = r.weather.now;
-  const next = r.weather.hourly.slice(1, 7).map((h) =>
-    `<div style="text-align:center;flex:1"><div class="muted small">${clock(h.epoch)}</div>${windSvg(h.dir_from).replace('<svg', '<svg width="26" height="26"')}<div class="small">${h.wind_kmh}</div></div>`).join('');
-  $('#weather-card').innerHTML = `<h2>Wind & weather</h2>
-    <div class="wx">${windSvg(w.dir_from)}<div><b>${w.wind_kmh} km/h</b> from the ${esc(w.dir_text)}<br>
-      <span class="muted">${w.temp_c} °C · ${w.rh}% humidity · ${esc(w.source)}</span></div></div>
-    <div style="display:flex;gap:4px;margin-top:12px">${next}</div>`;
+  const rows = r.weather.hourly.slice(1, 13).map((h) =>
+    `<tr><td>${clock(h.epoch)}</td><td>${compass(h.dir_from)}</td><td>${h.wind_kmh}</td><td>${h.temp_c}</td><td>${h.rh}</td></tr>`).join('');
+  $('#weather-card').innerHTML = `
+    <div class="wx-now">
+      <div><span>${t('Wind')}</span><b>${w.wind_kmh} km/h</b></div>
+      <div><span>${t('From')}</span><b>${esc(I18N.dir(w.dir_text))} (${w.dir_from}°)</b></div>
+      <div><span>${t('Temperature')}</span><b>${w.temp_c} °C</b></div>
+      <div><span>${t('Rel. humidity')}</span><b>${w.rh}%</b></div>
+    </div>
+    <div class="wx-src">${t('Source: {s}', { s: esc(tokens(w.source)) })}</div>
+    ${r.weather.shift ? `<div class="alert" style="margin:0 0 10px">${esc(tokens(r.weather.shift.text))}</div>` : ''}
+    <table class="grid"><thead><tr><th>${t('Time')}</th><th>${t('From')}</th><th>km/h</th><th>°C</th><th>${t('RH %')}</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderQuality(r) {
   const c = r.confidence;
-  const cal = r.calibration ? `<div class="small" style="margin-top:8px">${esc(r.calibration.text)}</div>` : '';
-  $('#quality').innerHTML = `<div style="display:flex;align-items:center;gap:10px"><span class="dot g-${c.grade}" style="width:18px;height:18px"></span>
-    <b style="font-size:20px">${gradeText[c.grade]} · ${c.score}%</b></div>
+  const cal = r.calibration ? `<div class="note" style="margin-top:8px">${esc(tokens(r.calibration.text))}</div>` : '';
+  $('#quality').innerHTML = `<div class="q-grade"><span class="muted">${t('Overall')}</span><b class="t-${c.grade}">${gradeText[c.grade]} (${c.score}%)</b></div>
     <ul class="reasons">${c.reasons.map((x) => `<li>${esc(tokens(x))}</li>`).join('')}</ul>${cal}`;
-  const s = r.sources, t = r.timing_ms;
-  const warn = (r.warnings || []).map((w) => `<div style="color:var(--amber)">⚠ ${esc(w)}</div>`).join('');
-  $('#sources').innerHTML = `${warn}Terrain: ${esc(s.terrain)}<br>Vegetation: ${esc(s.fuel)}<br>Weather: ${esc(s.weather)}<br>
-    Places: ${esc(s.places)}${s.local.length ? `<br>Field data: ${s.local.length} report(s)` : ''}<br>
-    ${r.wind_field ? `Wind on the ground: ${esc(r.wind_field.solver)}<br>` : ''}
-    Forecast computed in ${t.recompute} ms (${t.members} scenarios, ${r.grid.cell_m} m cells).
-    <div class="mobile-only" style="margin-top:12px"><button class="btn ghost" onclick="document.querySelector('#btn-new').click()">Start a new fire</button></div>`;
+  const s = r.sources, tm = r.timing_ms;
+  const warn = (r.warnings || []).map((w) => `<div class="warn">${esc(tokens(w))}</div>`).join('');
+  $('#sources').innerHTML = `${warn}<dl class="kv">
+    <dt>${t('Terrain')}</dt><dd>${esc(s.terrain)}</dd><dt>${t('Vegetation')}</dt><dd>${esc(s.fuel)}</dd>
+    <dt>${t('Weather')}</dt><dd>${esc(s.weather)}</dd><dt>${t('Places')}</dt><dd>${esc(s.places)}</dd>
+    ${s.local.length ? `<dt>${t('Field data')}</dt><dd>${t('{n} report(s)', { n: s.local.length })}</dd>` : ''}
+    ${r.wind_field ? `<dt>${t('Surface wind')}</dt><dd>${esc(r.wind_field.solver)}</dd>` : ''}
+    <dt>${t('Computed')}</dt><dd>${t('{ms} ms, {n} scenarios, {c} m cells', { ms: tm.recompute, n: tm.members, c: r.grid.cell_m })}</dd></dl>`;
 }
+
+applyLanguage(I18N.lang);
 
 // ── Live updates (drop-in files, background data, other devices) ─────────
 setInterval(async () => {
