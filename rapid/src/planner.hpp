@@ -22,7 +22,7 @@
 namespace rapid {
 
 struct Resources {
-    int aircraft = 2, trucks = 4, dozers = 1;
+    int aircraft = 0, trucks = 0, dozers = 0;  // nothing until the commander enters it
 };
 
 struct PlanTarget {

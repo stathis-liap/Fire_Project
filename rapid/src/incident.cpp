@@ -233,6 +233,7 @@ json Incident::start(const json& req) {
     manual_.clear();
     disabled_.clear();
     forced_.clear();
+    resources_ = Resources{};
     next_dest_id_ = next_manual_id_ = 1;
     active_ = false;
 
@@ -763,8 +764,10 @@ void Incident::recompute_locked() {
     // ── What-if: run the full ensemble with the chosen plan ──
     std::vector<Intervention> ivs;
     std::vector<double> breach;
+    // Only actions the user switched on (or drew) are applied; the planner's
+    // own choices stay recommendations until accepted.
     for (auto& r : recs_) {
-        r.enabled = r.simulated && (r.selected || r.forced);  // now: "in the plan"
+        r.enabled = r.simulated && r.forced;  // now: "in the plan"
         if (r.enabled) { ivs.push_back(r.iv); breach.push_back(r.breach_p); }
     }
     for (size_t i = 0; i < manual_.size(); ++i) { ivs.push_back(manual_[i]); breach.push_back(manual_breach[i]); }
@@ -1325,10 +1328,16 @@ json Incident::set_plan(const json& req) {
     if (!active_) return {{"error", "No active fire."}};
     const double t_now = (now_epoch() - t0_epoch_) / 60.0;
     if (req.contains("toggle")) {
-        // On = force into the plan (even beyond the budget); off = never use it.
+        // On = apply it (even beyond the budget); off = take it out of the
+        // plan again (it may still be recommended).
         std::string key = req["toggle"].value("key", "");
         if (req["toggle"].value("enabled", true)) { disabled_.erase(key); forced_.insert(key); }
-        else { forced_.erase(key); disabled_.insert(key); }
+        else forced_.erase(key);
+    }
+    if (req.contains("dismiss")) {  // never recommend this option again
+        std::string key = req["dismiss"].get<std::string>();
+        forced_.erase(key);
+        disabled_.insert(key);
     }
     if (req.value("reset_choices", false)) { disabled_.clear(); forced_.clear(); }
     if (req.contains("add")) {
