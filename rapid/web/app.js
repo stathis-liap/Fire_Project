@@ -372,20 +372,29 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   try { localStorage.setItem('wilson-theme', theme); } catch (_) {}
   const b = $('#btn-theme');
-  b.textContent = t(theme === 'light' ? 'Dark' : 'Light');
+  b.setAttribute('aria-checked', String(theme === 'dark'));
+  b.setAttribute('aria-label', t('Dark theme'));
   b.title = t(theme === 'light' ? 'Switch to the dark theme' : 'Switch to the light theme');
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = theme === 'light' ? '#eef0f3' : '#0e1116';
 }
 function applyLanguage(lang) {
   I18N.set(lang);
   I18N.apply();
-  $$('#lang-seg button').forEach((x) => x.classList.toggle('on', x.dataset.lang === I18N.lang));
+  $('#lang-switch').setAttribute('aria-checked', String(I18N.lang === 'el'));
   applyTheme(document.documentElement.dataset.theme || 'dark');
   if (typeof applyLayout === 'function' && state.result) applyLayout();
   if (state.result) render(state.result, false);
   if (state.tool) $('#draw-text').textContent = t(TOOL_TEXT[state.tool]);
 }
-$('#btn-theme').onclick = () => applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
-$('#lang-seg').onclick = (e) => { const b = e.target.closest('button'); if (b) applyLanguage(b.dataset.lang); };
+$('#btn-theme').onclick = () => {
+  const root = document.documentElement;
+  root.classList.add('theme-anim');
+  applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light');
+  clearTimeout(applyTheme._t);
+  applyTheme._t = setTimeout(() => root.classList.remove('theme-anim'), 350);
+};
+$('#lang-switch').onclick = () => applyLanguage(I18N.lang === 'el' ? 'en' : 'el');
 {
   // ?theme=light|dark and ?lang=el|en override the saved choice (bookmarks, wall screens).
   const q = new URLSearchParams(location.search);
@@ -404,14 +413,33 @@ const layout = (() => {
 let savedLayout = null;
 try { savedLayout = localStorage.getItem('wilson-layout-v2'); } catch (_) {}
 if (innerWidth <= 900 && !savedLayout) layout.left = 'hidden';
+// Minimal window-control icons; the hover text (title) explains each one.
+const WIN_ICONS = {
+  min: '<path d="M3.5 12.5h9"/>',
+  max: '<rect x="3.5" y="3.5" width="9" height="9" rx="1"/>',
+  restore: '<rect x="3.5" y="6" width="6.5" height="6.5" rx="1"/><path d="M6 6V4.5a1 1 0 0 1 1-1h4.5a1 1 0 0 1 1 1V9a1 1 0 0 1-1 1H10"/>',
+  close: '<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>',
+};
+function winBtn(el, icon, label) {
+  if (el.dataset.icon !== icon || !el.firstChild) {
+    el.dataset.icon = icon;
+    el.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${WIN_ICONS[icon]}</svg>`;
+  }
+  el.title = t(label);
+  el.setAttribute('aria-label', t(label));
+}
 function applyLayout() {
   try { localStorage.setItem('wilson-layout-v2', JSON.stringify(layout)); } catch (_) {}
   const b = document.body.classList;
   b.toggle('left-hidden', layout.left === 'hidden');
   b.toggle('left-wide', layout.left === 'wide');
   b.toggle('dock-min', layout.dock === 'min');
-  $('#left-wide').textContent = t(layout.left === 'wide' ? 'Narrow' : 'Widen');
-  $('#dock-hide').textContent = t(layout.dock === 'min' ? 'Expand' : 'Minimize');
+  winBtn($('#left-wide'), layout.left === 'wide' ? 'restore' : 'max',
+    layout.left === 'wide' ? 'Narrow the column' : 'Widen the column');
+  winBtn($('#left-hide'), 'min', 'Collapse the column to the left');
+  winBtn($('#dock-hide'), layout.dock === 'min' ? 'max' : 'min',
+    layout.dock === 'min' ? 'Expand the operations panel' : 'Minimize the operations panel');
+  $$('[data-close-panel]').forEach((x) => winBtn(x, 'close', 'Close'));
   $('#left-tab').classList.toggle('hidden', !state.result || layout.left !== 'hidden');
   for (const k of ['wx', 'quality']) {
     $(`#rp-${k}`).classList.toggle('hidden', !layout[k]);

@@ -32,10 +32,16 @@
   <button id="btn-new" class="btn hidden" data-i18n-title title="Close this incident and start a new one" data-i18n>New incident</button>
   <div id="conf-pill" class="conf hidden" data-i18n-title title="How far to trust this forecast"></div>
   <div class="prefs">
-    <button id="btn-theme" class="btn" title="Switch to the light theme">Light</button>
-    <div class="seg compact" id="lang-seg" title="Language / Γλώσσα">
-      <button data-lang="en">EN</button><button data-lang="el">ΕΛ</button>
-    </div>
+    <button id="btn-theme" class="theme-switch" role="switch" aria-checked="false" aria-label="Dark theme" title="Switch to the light theme">
+      <span class="ts-knob" aria-hidden="true">
+        <svg class="ts-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></g></svg>
+        <svg class="ts-moon" viewBox="0 0 24 24"><path fill="currentColor" d="M20.2 14.6A8.5 8.5 0 0 1 9.4 3.8a8.5 8.5 0 1 0 10.8 10.8z"/></svg>
+      </span>
+    </button>
+    <button id="lang-switch" class="lang-switch" type="button" role="switch" aria-checked="false" aria-label="Ελληνικά / Greek" title="Language / Γλώσσα">
+      <span class="ls-lbl ls-lbl-en" aria-hidden="true">EN</span><span class="ls-lbl ls-lbl-el" aria-hidden="true">ΕΛ</span>
+      <span class="ls-knob" aria-hidden="true"><svg class="ls-flag ls-en" viewBox="0 0 60 30" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><clipPath id="fl-uk-s"><path d="M0,0v30h60V0z"/></clipPath><clipPath id="fl-uk-t"><path d="M30,15h30v15zv15H0zH0V0zV0h30z"/></clipPath><g clip-path="url(#fl-uk-s)"><path d="M0,0v30h60V0z" fill="#012169"/><path d="M0,0 60,30M60,0 0,30" stroke="#fff" stroke-width="6"/><path d="M0,0 60,30M60,0 0,30" clip-path="url(#fl-uk-t)" stroke="#C8102E" stroke-width="4"/><path d="M30,0v30M0,15h60" stroke="#fff" stroke-width="10"/><path d="M30,0v30M0,15h60" stroke="#C8102E" stroke-width="6"/></g></svg><svg preserveAspectRatio="xMidYMid slice" class="ls-flag ls-el" viewBox="0 0 27 18" aria-hidden="true"><rect width="27" height="18" fill="#0D5EAF"/><path d="M0,3h27M0,9h27M0,15h27M10,3h17M10,9h17" stroke="#fff" stroke-width="2"/><rect width="10" height="10" fill="#0D5EAF"/><path d="M5,0v10M0,5h10" stroke="#fff" stroke-width="2"/></svg></span>
+    </button>
   </div>
 </header>
 
@@ -47,11 +53,11 @@
   </div>
   <div class="rt-panels">
     <section class="rpanel" id="rp-wx">
-      <header><h2 data-i18n>Weather</h2><button class="lnk" data-close-panel="wx" data-i18n>Close</button></header>
+      <header><h2 data-i18n>Weather</h2><button class="win-btn" data-close-panel="wx" data-icon="close"></button></header>
       <div class="rbody" id="weather-card"></div>
     </section>
     <section class="rpanel" id="rp-quality">
-      <header><h2 data-i18n>Forecast quality</h2><button class="lnk" data-close-panel="quality" data-i18n>Close</button></header>
+      <header><h2 data-i18n>Forecast quality</h2><button class="win-btn" data-close-panel="quality" data-icon="close"></button></header>
       <div class="rbody">
         <div id="quality"></div>
         <div id="sources"></div>
@@ -65,8 +71,8 @@
   <div class="lhead">
     <h2 data-i18n>Fire forecast</h2>
     <div>
-      <button class="lnk" id="left-wide" data-i18n-title title="Widen the column" data-i18n>Widen</button>
-      <button class="lnk" id="left-hide" data-i18n-title title="Collapse the column to the left" data-i18n>Hide</button>
+      <button class="win-btn" id="left-wide"></button>
+      <button class="win-btn" id="left-hide" data-icon="min"></button>
     </div>
   </div>
   <div class="lbody">
@@ -105,7 +111,7 @@
       <button data-view="plan" data-i18n>With plan</button>
     </div>
     <span id="dock-summary" class="note"></span>
-    <button class="lnk" id="dock-hide" data-i18n>Minimize</button>
+    <button class="win-btn" id="dock-hide"></button>
   </div>
   <div class="dbody">
     <div class="dcol" id="res-card">
