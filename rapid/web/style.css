@@ -92,7 +92,12 @@ h3 { font-size: 11px; margin: 0 0 6px; text-transform: uppercase; letter-spacing
 #topbar { position: absolute; top: 0; left: 0; right: 0; height: var(--top-h); z-index: 8; display: flex; align-items: center;
   gap: 12px; padding: 0 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .brand { font-size: 15px; letter-spacing: .12em; white-space: nowrap; padding-right: 14px; border-right: 1px solid var(--line); }
-.brand b { color: var(--accent-hi); }
+.brand b { color: var(--accent-hi); font-weight: 700; }
+.brand-row { display: flex; align-items: flex-end; gap: 8px; line-height: 1; }
+.brand-logo { height: 26px; width: auto; display: block; }
+.brand-logo.logo-light { display: none; }
+:root[data-theme="light"] .brand-logo.logo-dark { display: none; }
+:root[data-theme="light"] .brand-logo.logo-light { display: block !important; }
 .brand span { display: block; font-size: 10px; letter-spacing: .1em; color: var(--muted); text-transform: uppercase; }
 .incident { font-size: 12px; line-height: 1.3; white-space: nowrap; }
 .incident b { font-size: 13px; }
